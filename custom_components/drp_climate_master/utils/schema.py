@@ -1,0 +1,317 @@
+"""Schema for DRP Climate."""
+import logging
+import voluptuous as vol
+
+import homeassistant.helpers.config_validation as cv
+
+from homeassistant.const import (
+    CONF_NAME,
+    CONF_FRIENDLY_NAME,
+    CONF_SENSORS,
+    CONF_UNIQUE_ID,
+    CONF_TEMPERATURE_UNIT,
+)
+
+from custom_components.drp_climate_master.utils.const import (
+    CONF_ACTUATOR,
+    CONF_ADJUSTABLE_SUPPLY_UNIT,
+    CONF_ADJUSTABLE_TEMP_SYSTEM_RETURN,
+    CONF_ADJUSTABLE_TEMP_SYSTEM_SUPPLY,
+    CONF_ALARM,
+    CONF_ALARMS,
+    CONF_AREA,
+    CONF_AREAS,
+    CONF_AUTUMN,
+    CONF_BOILER_TEMP_SYSTEM_RETURN,
+    CONF_BOILER_TEMP_SYSTEM_SUPPLY,
+    CONF_CLIMATE,
+    CONF_COMPRESSOR_MANAGEMENT,
+    CONF_COMPRESSOR_ONLY,
+    CONF_COOLING,
+    CONF_COOLING_DT_SETPOINT,
+    CONF_COOLING_MANAGEMENT,
+    CONF_COOLING_ONLY,
+    CONF_COOLING_T_SETPOINT,
+    CONF_DEHUMIDIFICATION,
+    CONF_DEHUMIDIFICATION_ONLY,
+    CONF_DEHUMIDIFICATION_OR_COOLING,
+    CONF_DELTA_DEW_POINT_SETPOINT,
+    CONF_DEVICES,
+    CONF_DEW_POINT,
+    CONF_DEW_POINT_SETPOINT,
+    CONF_DIRECT_SUPPLY_UNIT,
+    CONF_DIRECT_TEMP_SYSTEM_RETURN,
+    CONF_DIRECT_TEMP_SYSTEM_SUPPLY,
+    CONF_FIRST_WATER_THEN_COMPRESSOR,
+    CONF_FM_POWER,
+    CONF_FORCE_COOLING,
+    CONF_FORCE_FREE_COOLING,
+    CONF_FORCE_HEATING,
+    CONF_H_AMBIENT,
+    CONF_H_SETPOINT,
+    CONF_HEATING,
+    CONF_HEATING_DT_SETPOINT,
+    CONF_HEATING_T_SETPOINT,
+    CONF_HIGH_PRESSURE,
+    CONF_HIGH_WATER_TEMP,
+    CONF_HOME_WINDOWS_STATE,
+    CONF_HUMIDITY,
+    CONF_INDOOR,
+    CONF_LOW_WATER_TEMP,
+    CONF_MAX_TEMP,
+    CONF_MIN_TEMP,
+    CONF_MODE,
+    CONF_MQ,
+    CONF_NOBODYSIN,
+    CONF_PDC_TEMP_WATER_IN,
+    CONF_PDC_TEMP_WATER_OUT,
+    CONF_POWER,
+    CONF_POWER_ON_NIGHT,
+    CONF_POWER_ON_TODAY,
+    CONF_RADIANT,
+    CONF_REQUESTS,
+    CONF_SCENARIOS,
+    CONF_SEASON,
+    CONF_SPARE_SETPOINT,
+    CONF_SPRING,
+    CONF_STEP,
+    CONF_SUMMER,
+    CONF_SUPPLY_UNITS,
+    CONF_T_AMBIENT,
+    CONF_T_OUTDOOR,
+    CONF_T_SETPOINT,
+    CONF_T_WATER,
+    CONF_TCOLLECTOR,
+    CONF_TEMPERATURE,
+    CONF_THREE_POINT_MIXING_VALVE,
+    CONF_VACATION,
+    CONF_VALUE,
+    CONF_VENT_RECIRCULATION,
+    CONF_VMC,
+    CONF_WATER,
+    CONF_WATER_ONLY,
+    CONF_WEATHER,
+    CONF_WINTER,
+    DEFAULT_CLIMATE_NAME,
+    DEFAULT_TEMP_UNIT,
+    DOMAIN
+)
+
+_LOGGER = logging.getLogger(__name__)
+
+# ########## # ########## # ########## # ########## #
+# S C H E M A
+# ########## # ########## # ########## # ########## #
+
+AREAS_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_AREA): cv.string,
+        vol.Optional(CONF_INDOOR, default=True): vol.In([True,False,]),
+        vol.Optional(CONF_RADIANT, default=True): vol.In([True,False,]),
+        vol.Required(CONF_SENSORS): vol.Schema(
+            {
+                vol.Required(CONF_TEMPERATURE): cv.entity_id,
+                vol.Required(CONF_HUMIDITY): cv.entity_id,
+            }
+        ),
+        vol.Optional(CONF_TCOLLECTOR): cv.entity_id,
+        vol.Optional(CONF_MQ): cv.positive_int,
+    }
+)
+
+SUPPLY_UNITS_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_DIRECT_SUPPLY_UNIT): cv.entity_id,
+        vol.Required(CONF_ADJUSTABLE_SUPPLY_UNIT): cv.entity_id,
+        vol.Required(CONF_THREE_POINT_MIXING_VALVE): cv.entity_id,
+        vol.Required(CONF_SENSORS): vol.Schema(
+            {
+                vol.Required(CONF_BOILER_TEMP_SYSTEM_SUPPLY): cv.entity_id,
+                vol.Required(CONF_BOILER_TEMP_SYSTEM_RETURN): cv.entity_id,
+                vol.Required(CONF_ADJUSTABLE_TEMP_SYSTEM_SUPPLY): cv.entity_id,
+                vol.Required(CONF_ADJUSTABLE_TEMP_SYSTEM_RETURN): cv.entity_id,
+                vol.Required(CONF_DIRECT_TEMP_SYSTEM_SUPPLY): cv.entity_id,
+                vol.Required(CONF_DIRECT_TEMP_SYSTEM_RETURN): cv.entity_id,
+            }
+        ),
+    }
+)
+
+RADIANT_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_FM_POWER): cv.entity_id,
+        vol.Required(CONF_POWER): cv.entity_id,
+        # vol.Required(CONF_POWER): cv.entity_id,
+        vol.Required(CONF_MODE): vol.Schema(
+            {
+                vol.Required(CONF_ACTUATOR): cv.entity_id,
+                vol.Required(CONF_HEATING): cv.positive_int,
+                vol.Required(CONF_COOLING): cv.positive_int,
+            }
+        ),
+        vol.Required(CONF_HEATING_T_SETPOINT): vol.Schema({
+            vol.Required(CONF_ACTUATOR): cv.entity_id,
+            vol.Required(CONF_VALUE): cv.positive_int,
+        }),
+        vol.Required(CONF_HEATING_DT_SETPOINT): vol.Schema({
+            vol.Required(CONF_ACTUATOR): cv.entity_id,
+            vol.Required(CONF_VALUE): cv.positive_int,
+        }),
+        vol.Required(CONF_COOLING_T_SETPOINT): vol.Schema({
+            vol.Required(CONF_ACTUATOR): cv.entity_id,
+            vol.Required(CONF_VALUE): cv.positive_int,
+        }),
+        vol.Required(CONF_COOLING_DT_SETPOINT): vol.Schema({
+            vol.Required(CONF_ACTUATOR): cv.entity_id,
+            vol.Required(CONF_VALUE): cv.positive_int,
+        }),
+        vol.Required(CONF_SENSORS): vol.Schema(
+            {
+                vol.Required(CONF_PDC_TEMP_WATER_IN): cv.entity_id,
+                vol.Required(CONF_PDC_TEMP_WATER_OUT): cv.entity_id,
+            }
+        ),
+    }
+)
+
+VMC_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_POWER): cv.entity_id,
+        vol.Required(CONF_T_SETPOINT): cv.entity_id,
+        vol.Required(CONF_H_SETPOINT): cv.entity_id,
+        vol.Required(CONF_DEW_POINT_SETPOINT): cv.entity_id,
+        vol.Required(CONF_DELTA_DEW_POINT_SETPOINT): cv.entity_id,
+        vol.Required(CONF_SPARE_SETPOINT): cv.entity_id,
+        vol.Required(CONF_VENT_RECIRCULATION): cv.entity_id,
+        vol.Required(CONF_FORCE_HEATING): cv.entity_id,
+        vol.Required(CONF_FORCE_COOLING): cv.entity_id,
+        vol.Required(CONF_FORCE_FREE_COOLING): cv.entity_id,
+
+        vol.Required(CONF_SEASON): vol.Schema(
+            {
+                vol.Required(CONF_ACTUATOR): cv.entity_id,
+                vol.Required(CONF_WINTER): cv.string,
+                vol.Required(CONF_SUMMER): cv.string,
+                vol.Required(CONF_AUTUMN): cv.string,
+                vol.Required(CONF_SPRING): cv.string,
+            }
+         ),
+
+        vol.Required(CONF_COMPRESSOR_MANAGEMENT): vol.Schema(
+            {
+                vol.Required(CONF_ACTUATOR): cv.entity_id,
+                vol.Required(CONF_DEHUMIDIFICATION_OR_COOLING): cv.positive_int,
+                vol.Required(CONF_DEHUMIDIFICATION_ONLY): cv.positive_int,
+                vol.Required(CONF_COOLING_ONLY): cv.positive_int,
+            }
+         ),
+
+        vol.Required(CONF_COOLING_MANAGEMENT): vol.Schema(
+            {
+                vol.Required(CONF_ACTUATOR): cv.entity_id,
+                vol.Required(CONF_COMPRESSOR_ONLY): cv.positive_int,
+                vol.Required(CONF_WATER_ONLY): cv.positive_int,
+                vol.Required(CONF_FIRST_WATER_THEN_COMPRESSOR): cv.positive_int,
+            }
+         ),
+
+        vol.Required(CONF_REQUESTS): vol.Schema(
+            {
+                vol.Required(CONF_WATER): cv.entity_id,
+                vol.Required(CONF_DEHUMIDIFICATION): cv.entity_id,
+                vol.Required(CONF_HEATING): cv.entity_id,
+                vol.Required(CONF_COOLING): cv.entity_id,
+            }
+         ),
+
+        vol.Required(CONF_SENSORS): vol.Schema(
+            {
+                vol.Required(CONF_T_AMBIENT): cv.entity_id,
+                vol.Required(CONF_H_AMBIENT): cv.entity_id,
+                vol.Required(CONF_T_WATER): cv.entity_id,
+                vol.Required(CONF_T_OUTDOOR): cv.entity_id,
+                vol.Required(CONF_POWER_ON_NIGHT): cv.entity_id,
+                vol.Required(CONF_POWER_ON_TODAY): cv.entity_id,
+            }
+        ),
+
+        vol.Required(CONF_ALARMS): vol.Schema(
+            {
+                vol.Required(CONF_HIGH_PRESSURE): cv.entity_id,
+                vol.Required(CONF_DEW_POINT): cv.entity_id,
+                vol.Required(CONF_LOW_WATER_TEMP): cv.entity_id,
+                vol.Required(CONF_HIGH_WATER_TEMP): cv.entity_id,
+                vol.Required(CONF_ALARM): cv.entity_id,
+            }
+        ),
+    }
+)
+
+DEVICES_SCHEMA = vol.Schema(
+    {
+        vol.Optional(CONF_SUPPLY_UNITS): vol.All(SUPPLY_UNITS_SCHEMA),
+        vol.Optional(CONF_RADIANT): vol.All(RADIANT_SCHEMA),
+        vol.Optional(CONF_VMC): vol.All(VMC_SCHEMA),
+    }
+)
+
+BASE_CLIMATE_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_NAME): cv.string,
+        vol.Optional(CONF_FRIENDLY_NAME): cv.string,
+        vol.Optional(CONF_UNIQUE_ID): cv.string,
+
+        vol.Optional(CONF_MAX_TEMP, default=35): vol.Coerce(float),
+        vol.Optional(CONF_MIN_TEMP, default=5): vol.Coerce(float),
+        vol.Optional(CONF_STEP, default=0.5): vol.Coerce(float),
+        vol.Optional(CONF_TEMPERATURE_UNIT, default=DEFAULT_TEMP_UNIT): cv.string,
+
+        vol.Required(CONF_AREAS): vol.All(
+            cv.ensure_list, [vol.All(AREAS_SCHEMA)]
+        ),
+        vol.Optional(CONF_DEVICES): vol.All(DEVICES_SCHEMA),
+
+        vol.Required(CONF_HOME_WINDOWS_STATE): cv.entity_id,
+        vol.Required(CONF_WEATHER): cv.string,
+        vol.Required(CONF_SCENARIOS) : vol.Schema(
+            {
+                vol.Required(CONF_VACATION): cv.string,
+                vol.Required(CONF_NOBODYSIN): cv.string,
+            }
+        )
+    }
+)
+
+CLIMATE_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_NAME, default=DEFAULT_CLIMATE_NAME): cv.string,
+        vol.Required(CONF_CLIMATE): vol.All(
+            cv.ensure_list, [vol.All(BASE_CLIMATE_SCHEMA)]
+        ),
+    }
+)
+
+CONFIG_SCHEMA = vol.Schema(
+    {
+        DOMAIN: vol.All(
+            cv.ensure_list,
+            # scan_interval_validator,
+            # duplicate_entity_validator,
+            # duplicate_modbus_validator,
+            [
+                vol.Any(CLIMATE_SCHEMA),
+            ],
+        ),
+    },
+    extra=vol.ALLOW_EXTRA,
+)
+
+def area( areas_config : dict, name : str = "") -> dict | None:
+    """Get area configuration by name."""
+    for area_cfg in areas_config:
+        area_name = area_cfg.get(CONF_AREA)
+        # _LOGGER.debug( "%s %s", area_name, name )
+        if area_name == name:
+            return area_cfg
+
+    return None
