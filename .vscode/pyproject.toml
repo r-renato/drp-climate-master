@@ -1,0 +1,24 @@
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["tests/fixtures/*"]
+
+[tool.ruff.lint]
+select = ["E","F","I","UP","B","PIE","SIM","PLC","PLE"]
+ignore = ["E501"]  # se il wrap lo fa black
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_ignores = true
+warn_redundant_casts = true
+strict_optional = true
+no_implicit_optional = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+pretty = true
+# Home Assistant usa molto runtime typing: evita rumore su import dinamici
+ignore_missing_imports = true

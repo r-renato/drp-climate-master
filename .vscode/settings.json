@@ -1,0 +1,6 @@
+{
+  "python.analysis.typeCheckingMode": "basic",
+  "python.linting.enabled": true,
+  "ruff.lint.args": ["--fix"],
+  "editor.formatOnSave": true
+}

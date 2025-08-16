@@ -12,7 +12,7 @@ from homeassistant.const import (
     CONF_TEMPERATURE_UNIT,
 )
 
-from custom_components.drp_climate_master.utils.const import (
+from ..const import (
     CONF_ACTUATOR,
     CONF_ADJUSTABLE_SUPPLY_UNIT,
     CONF_ADJUSTABLE_TEMP_SYSTEM_RETURN,
