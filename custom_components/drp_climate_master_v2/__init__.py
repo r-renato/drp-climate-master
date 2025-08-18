@@ -8,28 +8,33 @@ from homeassistant.config_entries import ConfigEntry, SOURCE_IMPORT
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers.typing import ConfigType
 
 from .const import ( # es.: DOMAIN="drp_climate", PLATFORMS=[Platform.CLIMATE]
     DOMAIN,
     PLATFORMS,
-    COORDINATORS,
+    COORDINATOR,
+    SUPERVISOR,
   )
 from .domain.schema import (
     CONFIG_SCHEMA,  # Importa lo schema di configurazione
     CLIMATE_SCHEMA,  # Importa lo schema per la sezione climate
 )
-from .controller.coordinator import DRPClimateCoordinator
+from .controller.coordinator import ClimateCoordinator
+from .controller.supervisor import ClimateSupervisor
 
 _LOGGER = logging.getLogger(__name__)
 
-async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Entry point quando Home Assistant legge configuration.yaml.
 
     - Prepara hass.data[DOMAIN]
     - Se trova la sezione YAML del dominio, innesca il flow di IMPORT,
       che convertirà la YAML in un ConfigEntry (gestito poi da async_setup_entry).
     """
-    hass.data.setdefault(DOMAIN, {COORDINATORS: {}, "yaml": []})
+    hass.data.setdefault(DOMAIN, {
+        "yaml" : []
+    })
 
     domain_cfg = config.get(DOMAIN)
     if not domain_cfg:
@@ -54,19 +59,29 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Configura l'integrazione da un ConfigEntry (UI o import da YAML)."""
     # Lazy import per evitare cicli durante lo sviluppo
-    from .controller.coordinator import DRPClimateCoordinator
-
-    domain_data = hass.data.setdefault(DOMAIN, {})
-    coordinators = domain_data.setdefault(COORDINATORS, {})
+    from .controller.coordinator import ClimateCoordinator
+    from .controller.supervisor import ClimateSupervisor
 
     # Istanzia e avvia il Coordinator legato a questo entry
-    coordinator: DRPClimateCoordinator = DRPClimateCoordinator(hass=hass, entry=entry)
+    coordinator: ClimateCoordinator = ClimateCoordinator(hass=hass, entry=entry)
     # Se il tuo coordinator espone runtime_config, popolalo in __init__ o qui
     # es: coordinator.runtime_config = build_runtime_config_from_options(entry.options)
     await coordinator.async_config_entry_first_refresh()
-    coordinators[entry.entry_id] = coordinator
 
+    supervisor: ClimateSupervisor = ClimateSupervisor(hass=hass, coordinator=coordinator)
+    await supervisor.async_start()
+
+    # Memorizza per entry_id
+    hass.data[DOMAIN].setdefault(entry.entry_id, {})
+    hass.data[DOMAIN][entry.entry_id][COORDINATOR] = coordinator
+    hass.data[DOMAIN][entry.entry_id][SUPERVISOR] = supervisor
+
+    # Piattaforme (climate, sensor, ecc.)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Reload su change delle options
+    entry.async_on_unload(entry.add_update_listener(_options_updated))
+
     _LOGGER.info("%s: setup entry '%s' completato.", DOMAIN, entry.entry_id)
     return True
 
@@ -75,14 +90,22 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Smonta piattaforme e risorse per un ConfigEntry."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
-    if unload_ok:
-        try:
-            coordinator = hass.data[DOMAIN][COORDINATORS].pop(entry.entry_id, None)
-            if coordinator and hasattr(coordinator, "async_close"):
-                await coordinator.async_close()
-        except KeyError:
-            pass
+    store = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+    if store:
+        supervisor = store.get(SUPERVISOR)
+        coordinator = store.get(COORDINATOR)
 
+        # Stop supervisor (chiude listener/task decisionali)
+        if supervisor and hasattr(supervisor, "async_stop"):
+            await supervisor.async_stop()
+
+        # Stop coordinator (chiude fast loop se presente)
+        for method in ("async_stop", "async_close"):
+            if coordinator and hasattr(coordinator, method):
+                await getattr(coordinator, method)()
+                break
+
+    if unload_ok:
         _LOGGER.info("%s: unload entry %s completato.", DOMAIN, entry.entry_id)
     else:
         _LOGGER.warning("%s: unload entry %s non riuscito.", DOMAIN, entry.entry_id)
@@ -91,8 +114,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def _options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Triggera un reload quando cambiano le Options da UI."""
-    _LOGGER.debug("Options updated for %s → reloading", entry.entry_id)
+    """Reload quando cambiano le Options da UI."""
+    _LOGGER.debug("%s: options aggiornate per %s → reload", DOMAIN, entry.entry_id)
     await hass.config_entries.async_reload(entry.entry_id)
 
 

@@ -1,6 +1,8 @@
 {
   "domain": "drp_climate_master_v2",
-  "name": "DRP (Domotic Residential Platform) Climate Master",
+  "name": "Climate Master (DRP)",
+  "manufacturer": "Domotic Residential Platform",
+  "version": "1.0",
   "documentation": "https://github.com/r-renato/home-climate-control",
   "issue_tracker": "https://github.com/r-renato/home-climate-control/issues",
   "iot_class": "local_polling",
@@ -17,7 +19,6 @@
   "r": "pythermalcomfort==2.5.4",
   "rr": "cmake==3.16.8",
   "config_flow": true,
-  "version": "1.0",
   "dependencies": [
     "sensor",
     "switch"

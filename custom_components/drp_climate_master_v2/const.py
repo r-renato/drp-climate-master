@@ -1,26 +1,76 @@
 """Costanti per DRP Climate Master (Foundation)."""
-
 from __future__ import annotations
+
+import json
+import logging
+from functools import lru_cache
+from typing import NamedTuple
+from importlib.resources import files  # Python 3.9+
 
 from typing import Final
 
 from homeassistant.const import Platform
 
+_LOGGER = logging.getLogger(__name__)
+
+# --- Metadati integrazione ----------------------------------------------------
+class IntegrationMeta(NamedTuple):
+    domain: str
+    name: str
+    version: str
+    manufacturer: str
+    issue_url: str
+
+@lru_cache(maxsize=1)
+def load_integration_meta(pkg: str = __package__ or "const") -> IntegrationMeta:
+    """
+    Legge manifest.json come risorsa del pacchetto (portabile anche con zipimport).
+    Ritorna fallback sicuri se mancante/corrotto.
+    """
+    default = IntegrationMeta("N/A", "Unknown Integration", "N/A", "N/A", "N/A")
+    try:
+        text = (files(pkg) / "manifest.json").read_text(encoding="utf-8")
+        data = json.loads(text)
+        return IntegrationMeta(
+            data.get("domain", default.domain),
+            data.get("name", default.name),
+            data.get("version", default.version),
+            data.get("manufacturer", default.manufacturer),
+            data.get("issue_tracker") or data.get("issue_url") or default.issue_url,
+        )
+    except Exception as e:
+        _LOGGER.error("Manifest read error for %s: %s", pkg, e)
+        return default
+
+def make_startup_banner(meta: IntegrationMeta) -> str:
+    return (
+        "-------------------------------------------------------------------\n"
+        f"{meta.name}\n"
+        f"Version: {meta.version}\n"
+        "This is a custom integration!\n"
+        "If you have any issues with this you need to open an issue here:\n"
+        f"{meta.issue_url}\n"
+        "-------------------------------------------------------------------"
+    )
+
+_META = load_integration_meta()   # __package__ punta a custom_components.<domain>
+DOMAIN, INTEGRATION_NAME, INTEGRATION_VERSION, INTEGRATION_MANUFACTURER, INTEGRATION_ISSUE_URL = _META
+STARTUP_MESSAGE = make_startup_banner(_META)
+
 # --- Identità integrazione ----------------------------------------------------
 
-DOMAIN: Final = "drp_climate_master_v2"
-INTEGRATION_NAME: Final = "DRP Climate Master"
-VERSION: Final = "0.1.0-foundation"
+# DOMAIN: Final = "drp_climate_master_v2"
 
 PLATFORMS = [Platform.CLIMATE]  # aggiungi Platform.SENSOR/NUMBER se in futuro esponi altre entità
 
-COORDINATORS: Final = "coordinators"
+COORDINATOR: Final = "coordinator"
+SUPERVISOR: Final = "supervisor"
 
 # ======================================================
 # Default
 # ======================================================
 
-DEFAULT_CLIMATE_NAME: Final[str] = "DRP Climate Master"
+DEFAULT_CLIMATE_NAME: Final[str] = "(DRP) Home Master"
 DEFAULT_TEMP_UNIT: Final[str] = "°C"
 
 # Sezioni top-level del blocco climate
