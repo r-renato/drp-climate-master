@@ -1,13 +1,13 @@
 """Costanti per DRP Climate Master (Foundation)."""
 from __future__ import annotations
 
-import json
-import logging
+from datetime import timedelta
 from functools import lru_cache
-from typing import NamedTuple
+from typing import NamedTuple, Final
 from importlib.resources import files  # Python 3.9+
 
-from typing import Final
+import json
+import logging
 
 from homeassistant.const import Platform
 
@@ -72,6 +72,12 @@ SUPERVISOR: Final = "supervisor"
 
 DEFAULT_CLIMATE_NAME: Final[str] = "(DRP) Home Master"
 DEFAULT_TEMP_UNIT: Final[str] = "°C"
+
+OPT_UPDATE_INTERVAL_S: Final[int] = 60
+
+# ======================================================
+# Schema
+# ======================================================
 
 # Sezioni top-level del blocco climate
 CONF_CLIMATE: Final[str] = "climate"

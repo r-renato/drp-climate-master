@@ -1,146 +1,205 @@
-from __future__ import annotations
+# custom_components/drp_climate_master_v2/helpers/config_entries.py
 
 from datetime import timedelta
-from typing import Any, Mapping, Optional
-from dataclasses import dataclass
-from datetime import timedelta
+from typing import Any, Mapping
 
 from homeassistant.config_entries import ConfigEntry
-
-from ..const import (
-    # struttura
-    CONF_DEVICES,
-    CONF_RADIANT,
-    CONF_VMC,
-    # runtime “storico” (fallback)
-    CONF_STEP,        # "temp_step"
-    # options flow “nuove”
-    # (se le tieni in const.py, importale qui; altrimenti inlined sotto come stringhe)
+from homeassistant.const import (
+    CONF_NAME,
+    CONF_FRIENDLY_NAME,
+    CONF_SENSORS,
+    CONF_UNIQUE_ID,
+    CONF_TEMPERATURE_UNIT,
 )
 
-# Se non hai messo queste costanti in const.py, lasciale così:
-OPT_UPDATE_INTERVAL_S = "update_interval_s"
-OPT_SUPPORTS_HEATING = "supports_heating"
-OPT_SUPPORTS_COOLING = "supports_cooling"
-OPT_SUPPORTS_DEHUMIDIFYING = "supports_dehumidifying"
-OPT_SETPOINT_STEP_C = "setpoint_step_c"
-OPT_MANUAL_OVERRIDE_MIN = "manual_override_minutes"
+from ..domain.models import (
+    AreaConfig,
+    ClimateConfig,
+    CompressorManagementConfig,
+    CoolingManagementConfig,
+    DevicesConfig,
+    ModeConfig,
+    PlantCapabilities,
+    RadiantConfig,
+    RadiantSensors,
+    RuntimeConfig,
+    ScenariosConfig,
+    SeasonConfig,
+    SensorPair,
+    SetpointConfig,
+    SupplyUnitSensors,
+    SupplyUnitsConfig,
+    VMCAlarmsConfig,
+    VMCConfig,
+    VMCRequestsConfig,
+    VMCSensorsConfig
+)
+from ..helpers.utils import _as_int
+from ..const import (
+    CONF_ADJUSTABLE_SUPPLY_UNIT,
+    CONF_ALARMS,
+    CONF_AREA,
+    CONF_AREAS,
+    CONF_CLIMATE,
+    CONF_COMPRESSOR_MANAGEMENT,
+    CONF_COOLING_DT_SETPOINT,
+    CONF_COOLING_MANAGEMENT,
+    CONF_COOLING_T_SETPOINT,
+    CONF_DELTA_DEW_POINT_SETPOINT,
+    CONF_DEVICES,
+    CONF_DEW_POINT_SETPOINT,
+    CONF_DIRECT_SUPPLY_UNIT,
+    CONF_FM_POWER,
+    CONF_FORCE_COOLING,
+    CONF_FORCE_FREE_COOLING,
+    CONF_FORCE_HEATING,
+    CONF_H_SETPOINT,
+    CONF_HEATING_DT_SETPOINT,
+    CONF_HEATING_T_SETPOINT,
+    CONF_HOME_WINDOWS_STATE,
+    CONF_INDOOR,
+    CONF_MODE,
+    CONF_MQ,
+    CONF_POWER,
+    CONF_RADIANT,
+    CONF_REQUESTS,
+    CONF_SCENARIOS,
+    CONF_SEASON,
+    CONF_SPARE_SETPOINT,
+    CONF_SUPPLY_UNITS,
+    CONF_T_SETPOINT,
+    CONF_TCOLLECTOR,
+    CONF_THREE_POINT_MIXING_VALVE,
+    CONF_VENT_RECIRCULATION,
+    CONF_VMC,
+    CONF_WEATHER,
+    OPT_UPDATE_INTERVAL_S,
+)
 
-@dataclass(slots=True, frozen=True)
-class PlantCapabilities:
+def _infer_capabilities_from_devices(options: Mapping[str, Any]) -> tuple[bool, bool, bool, bool]:
     """
-    Capacità operative della 'pianta' (impianto di climatizzazione).
-
-    Questi valori determinano le modalità di funzionamento che
-    il sistema può offrire all'utente.
+    Deduce heating/cooling/dehumidifying capabilities from devices config
+    when the user did not specify them explicitly.
     """
-    supports_heating: bool = True
-    supports_cooling: bool = False
-    supports_dehumidifying: bool = False
-    setpoint_step_c: float = 0.5
+    devices = options.get(CONF_DEVICES) or {}
+    if not isinstance(devices, Mapping):
+        return False, False, False, False  # fallback conservativo
+
+    radiant = devices.get(CONF_RADIANT) or {}
+    vmc = devices.get(CONF_VMC) or {}
+
+    supports_heating = supports_cooling = bool(radiant)
+    supports_dehumidifying = supports_ventilation  = bool(vmc)
 
 
-@dataclass(slots=True, frozen=True)
-class RuntimeConfig:
-    """
-    Configurazione runtime derivata dalle opzioni e dai dati
-    di configurazione di Home Assistant (config_flow o YAML).
-
-    È immutabile (frozen=True) così che non possa essere alterata
-    accidentalmente a runtime.
-    """
-    update_interval: timedelta
-    capabilities: PlantCapabilities
-    manual_override_minutes: int
-
-def _as_bool(value: Any, default: bool) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(int(value))
-    if isinstance(value, str):
-        v = value.strip().lower()
-        if v in {"true", "1", "yes", "on"}:
-            return True
-        if v in {"false", "0", "no", "off"}:
-            return False
-    return default
-
-
-def _as_int(value: Any, default: int) -> int:
-    try:
-        return int(value)
-    except Exception:
-        return default
-
-
-def _as_float(value: Any, default: float) -> float:
-    try:
-        return float(value)
-    except Exception:
-        return default
-
-
-def _infer_capabilities_from_devices(options: Mapping[str, Any]) -> tuple[bool, bool, bool]:
-    """
-    Deduce capability di base (heating/cooling/dehumidify) dalla struttura devices
-    quando l’utente non le ha impostate esplicitamente.
-    """
-    devices = options.get(CONF_DEVICES, {}) or {}
-    if not isinstance(devices, dict):
-        devices = {}
-
-    radiant = devices.get(CONF_RADIANT)
-    vmc = devices.get(CONF_VMC)
-
-    # euristiche conservative:
-    supports_heating = bool(radiant) or bool(vmc)
-    # se c'è radiant o vmc con gestione raffrescamento, presumiamo cooling
-    supports_cooling = bool(radiant) or bool(vmc)
-    # la deumidifica la assumiamo se c'è la VMC configurata
-    supports_dehumidifying = bool(vmc)
-
-    return supports_heating, supports_cooling, supports_dehumidifying
-
+    return supports_heating, supports_cooling, supports_dehumidifying, supports_ventilation
 
 def build_runtime_config(entry: ConfigEntry) -> RuntimeConfig:
-    """
-    Traduce entry.options → RuntimeConfig, con default sensati e
-    deduzioni basate sulla presenza dei blocchi devices.radiant/vmc
-    del tuo YAML importato in options.
-    """
     opts: Mapping[str, Any] = entry.options or {}
 
-    # ---- Update interval (con minimo 5s)
-    update_s = _as_int(opts.get(OPT_UPDATE_INTERVAL_S, 30), 30)
-    update_interval = timedelta(seconds=max(5, update_s))
+    # update_s = _as_int(opts.get(OPT_UPDATE_INTERVAL_S, 30), 30)
+    update_interval = timedelta(seconds=max(30, _as_int(OPT_UPDATE_INTERVAL_S, 30, min_value=30, max_value=300) or 30))
+    
+    supports_heating,\
+    supports_cooling,\
+    supports_dehumidifying,\
+    supports_ventilation = _infer_capabilities_from_devices(opts)
+    # supports_heating = _as_bool(opts.get(OPT_SUPPORTS_HEATING, ih), ih)
+    # supports_cooling = _as_bool(opts.get(OPT_SUPPORTS_COOLING, ic), ic)
+    # supports_dehumidifying = _as_bool(
+    #     opts.get(OPT_SUPPORTS_DEHUMIDIFYING, idh), idh
+    # )
+    # step = opts.get(OPT_SETPOINT_STEP_C) or opts.get(CONF_STEP)
+    # setpoint_step_c = _as_float(step, 0.5)
+    # manual_override_minutes = _as_int(
+    #     opts.get(OPT_MANUAL_OVERRIDE_MIN, 90), 90
+    # )
 
-    # ---- Capability: leggi esplicito, altrimenti deduci da devices
-    ih, ic, idh = _infer_capabilities_from_devices(opts)
-    supports_heating = _as_bool(opts.get(OPT_SUPPORTS_HEATING, ih), ih)
-    supports_cooling = _as_bool(opts.get(OPT_SUPPORTS_COOLING, ic), ic)
-    supports_dehumidifying = _as_bool(opts.get(OPT_SUPPORTS_DEHUMIDIFYING, idh), idh)
+    # ----- Climate -------------------------------------------------------
+    climate_cfg = (opts.get(CONF_CLIMATE) or [])[0]
+    areas = [
+        AreaConfig(
+            name=a[CONF_AREA],
+            indoor=a.get(CONF_INDOOR, True),
+            radiant=a.get(CONF_RADIANT, True),
+            sensors=SensorPair(**a[CONF_SENSORS]),
+            thermal_collector_valve_switch=a.get(CONF_TCOLLECTOR, None),
+            mq=a.get(CONF_MQ),
+        )
+        for a in climate_cfg.get(CONF_AREAS, [])
+    ]
 
-    # ---- Step setpoint: preferisci `setpoint_step_c`, fallback a `temp_step`
-    step = opts.get(OPT_SETPOINT_STEP_C)
-    if step is None:
-        step = opts.get(CONF_STEP)  # "temp_step" dal tuo schema precedente
-    setpoint_step_c = _as_float(step, 0.5)
+    su = climate_cfg[CONF_DEVICES][CONF_SUPPLY_UNITS]
+    supply_units = SupplyUnitsConfig(
+        direct_supply_unit=su[CONF_DIRECT_SUPPLY_UNIT],
+        adjustable_supply_unit=su[CONF_ADJUSTABLE_SUPPLY_UNIT],
+        three_point_mixing_valve=su[CONF_THREE_POINT_MIXING_VALVE],
+        sensors=SupplyUnitSensors(**su[CONF_SENSORS]),
+    )
 
-    # ---- Manual override (minuti)
-    manual_override_minutes = _as_int(opts.get(OPT_MANUAL_OVERRIDE_MIN, 90), 90)
+    dev_cfg = climate_cfg[CONF_DEVICES]
+    radiant = None
+    if CONF_RADIANT in dev_cfg:
+        r = dev_cfg[CONF_RADIANT]
+        radiant = RadiantConfig(
+            fm_power=r[CONF_FM_POWER],
+            power=r[CONF_POWER],
+            mode=ModeConfig(**r[CONF_MODE]),
+            heating_t_setpoint=SetpointConfig(**r[CONF_HEATING_T_SETPOINT]),
+            heating_dt_setpoint=SetpointConfig(**r[CONF_HEATING_DT_SETPOINT]),
+            cooling_t_setpoint=SetpointConfig(**r[CONF_COOLING_T_SETPOINT]),
+            cooling_dt_setpoint=SetpointConfig(**r[CONF_COOLING_DT_SETPOINT]),
+            sensors=RadiantSensors(**r[CONF_SENSORS]),
+        )
+
+    vmc = None
+    if CONF_VMC in dev_cfg:
+        v = dev_cfg[CONF_VMC]
+        vmc = VMCConfig(
+            power=v[CONF_POWER],
+            t_setpoint=v[CONF_T_SETPOINT],
+            h_setpoint=v[CONF_H_SETPOINT],
+            t_dew_point_setpoint=v[CONF_DEW_POINT_SETPOINT],
+            delta_t_dew_point_setpoint=v[CONF_DELTA_DEW_POINT_SETPOINT],
+            spare_setpoint=v[CONF_SPARE_SETPOINT],
+            vent_recirculation=v[CONF_VENT_RECIRCULATION],
+            force_heating=v[CONF_FORCE_HEATING],
+            force_cooling=v[CONF_FORCE_COOLING],
+            force_free_cooling=v[CONF_FORCE_FREE_COOLING],
+            season=SeasonConfig(**v[CONF_SEASON]),
+            compressor_management=CompressorManagementConfig(
+                **v[CONF_COMPRESSOR_MANAGEMENT]
+            ),
+            cooling_management=CoolingManagementConfig(
+                **v[CONF_COOLING_MANAGEMENT]
+            ),
+            requests=VMCRequestsConfig(**v[CONF_REQUESTS]),
+            sensors=VMCSensorsConfig(**v[CONF_SENSORS]),
+            alarms=VMCAlarmsConfig(**v[CONF_ALARMS]),
+        )
+
+    climate = ClimateConfig(
+        name=climate_cfg[CONF_NAME],
+        unique_id=climate_cfg[CONF_UNIQUE_ID],
+        areas=areas,
+        devices=DevicesConfig(
+            supply_units=supply_units, radiant=radiant, vmc=vmc
+        ),
+        home_windows_state=climate_cfg[CONF_HOME_WINDOWS_STATE],
+        weather=climate_cfg[CONF_WEATHER],
+        scenarios=ScenariosConfig(**climate_cfg[CONF_SCENARIOS]),
+    )
 
     caps = PlantCapabilities(
         supports_heating=supports_heating,
         supports_cooling=supports_cooling,
         supports_dehumidifying=supports_dehumidifying,
-        setpoint_step_c=setpoint_step_c,
+        supports_ventilation=supports_ventilation,
+        setpoint_step_c=0.5,  # TODO: read from options if set
     )
-
     return RuntimeConfig(
         update_interval=update_interval,
         capabilities=caps,
-        manual_override_minutes=manual_override_minutes,
+        manual_override_minutes=90,  # TODO: read from options if set
+        climate=climate,
     )

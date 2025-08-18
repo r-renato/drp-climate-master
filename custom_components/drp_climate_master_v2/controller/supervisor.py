@@ -74,8 +74,9 @@ from typing import Callable, Optional
 from homeassistant.components.climate.const import HVACAction, HVACMode
 from homeassistant.core import HomeAssistant
 
+from ..domain.enums import HVACOperatingProfile
+
 from ..controller.coordinator import ClimateCoordinator
-from ..domain.models import OperatingProfile
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -85,7 +86,7 @@ class _State:
     """Stato corrente (esposto a ClimateEntity)."""
     hvac_mode: HVACMode = HVACMode.AUTO
     hvac_action: HVACAction = HVACAction.IDLE
-    profile: Optional[OperatingProfile] = None
+    hvac_profile: Optional[HVACOperatingProfile] = None
    #  target_temp_c: float = 22.0
    #  cooling_strategy: CoolingStrategy = CoolingStrategy.FIRST_WATER_THEN_COMPRESSOR
 

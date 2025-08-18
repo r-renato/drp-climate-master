@@ -28,7 +28,7 @@ from .const import (
     INTEGRATION_VERSION,
     SUPERVISOR,
 )
-from .domain.models import OperatingProfile
+from .domain.enums import HVACOperatingProfile
 
 # from .const import DOMAIN, NAME, MANUFACTURER
 # from .controller.coordinator import DrpCoordinator, PlantSnapshot
@@ -49,9 +49,9 @@ class ClimateMasterEntity(CoordinatorEntity[ClimateCoordinator], ClimateEntity):
     # _attr_unique_id = "home_climate_master"
     _attr_hvac_modes = [HVACMode.OFF, HVACMode.AUTO]
     _attr_supported_features = ClimateEntityFeature.PRESET_MODE
-    _attr_preset_modes = OperatingProfile.values()
+    _attr_preset_modes = HVACOperatingProfile.values()
 
-    _attr_preset_mode: str = OperatingProfile.COMFORT.value
+    _attr_preset_mode: str = HVACOperatingProfile.COMFORT.value
     _attr_temperature_unit: str = UnitOfTemperature.CELSIUS
 
     def __init__(self, coordinator: ClimateCoordinator, supervisor: ClimateSupervisor, entry: ConfigEntry) -> None:
@@ -62,7 +62,7 @@ class ClimateMasterEntity(CoordinatorEntity[ClimateCoordinator], ClimateEntity):
         self._attr_name = entry.options.get(CONF_NAME, DEFAULT_CLIMATE_NAME)
         self._unique_id = self._attr_unique_id = slugify(entry.options.get( CONF_UNIQUE_ID, f"""{self._attr_name}-uid""" ))
 
-        self._preset_mode = OperatingProfile.COMFORT
+        self._preset_mode = HVACOperatingProfile.COMFORT
         self.map_on_hvac_mode = self._attr_hvac_mode = HVACMode.AUTO
 
         self._target_temp = 22.0
