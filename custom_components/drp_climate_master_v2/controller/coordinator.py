@@ -75,17 +75,18 @@ import asyncio
 import logging
 import contextlib
 
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
 from typing import Any, Optional, TYPE_CHECKING
 
 import async_timeout
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
 from ..helpers.config_entries import build_runtime_config
+from ..helpers.utils import _as_float, _as_bool
 
 from ..const import DOMAIN
 
@@ -127,6 +128,24 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._fast_task: asyncio.Task | None = None
         self._stop_event = asyncio.Event()
 
+        # Prepara la mappatura dei sensori per letture rapide nello SLOW loop
+        self._sensors: dict[str, Any] = {
+            "areas": {a.name: asdict(a.sensors) for a in self.runtime.climate.areas},
+            "supply_units": asdict(self.runtime.climate.devices.supply_units.sensors),
+        }
+
+        rad = self.runtime.climate.devices.radiant
+        if rad is not None:
+            self._sensors["radiant"] = asdict(rad.sensors)
+
+        vmc = self.runtime.climate.devices.vmc
+        if vmc is not None:
+            self._sensors["vmc"] = {
+                "sensors": asdict(vmc.sensors),
+                "requests": asdict(vmc.requests),
+                "alarms": asdict(vmc.alarms),
+            }
+
         super().__init__(
             hass,
             _LOGGER,
@@ -142,14 +161,90 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         _LOGGER.debug("First refresh completed")
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """
-        1) Legge sensori
-        2) Calcola setpoint
-        3) Decide azioni
-        4) Applica ai plant/valvole
+        """Acquisisce tutti i sensori configurati e restituisce uno snapshot.
+
+        Vengono interrogati:
+        - sensori di **temperatura/umidità** per ogni area;
+        - sensori delle **unità di alimentazione** (supply/return diretta e modulata);
+        - sensori del circuito **radiante** (se presenti);
+        - sensori, richieste e allarmi della **VMC** (se presente).
+
+        Lo snapshot è un dict strutturato come segue::
+
+            {
+                "areas": {area: {"temperature_c": float, "humidity_pct": float}},
+                "supply_units": {"boiler_temp_system_supply": float, ...},
+                "radiant": {"pdc_temp_water_in": float, ...},           # opzionale
+                "vmc": {
+                    "sensors": {"t_ambient": float, ...},
+                    "requests": {"water": bool, ...},
+                    "alarms": {"high_pressure": bool, ...},
+                },                                                         # opzionale
+            }
         """
 
-        return {}
+        async def _get_state(eid: str) -> Optional[str]:
+            state: State | None = self.hass.states.get(eid)
+            return state.state if state else None
+
+        jobs: list[tuple[tuple[str, ...], str]] = []
+        sensors = self._sensors
+
+        for area_name, pair in sensors["areas"].items():
+            jobs.append((("areas", area_name, "temperature_c"), pair["temperature"]))
+            jobs.append((("areas", area_name, "humidity_pct"), pair["humidity"]))
+
+        for key, eid in sensors["supply_units"].items():
+            jobs.append((("supply_units", key), eid))
+
+        if "radiant" in sensors:
+            for key, eid in sensors["radiant"].items():
+                jobs.append((("radiant", key), eid))
+
+        if "vmc" in sensors:
+            vmc = sensors["vmc"]
+            for key, eid in vmc["sensors"].items():
+                jobs.append((("vmc", "sensors", key), eid))
+            for key, eid in vmc["requests"].items():
+                jobs.append((("vmc", "requests", key), eid))
+            for key, eid in vmc["alarms"].items():
+                jobs.append((("vmc", "alarms", key), eid))
+
+        results = await asyncio.gather(*[_get_state(eid) for _, eid in jobs])
+
+        snapshot: dict[str, Any] = {"areas": {}, "supply_units": {}}
+
+        for (path, _), value in zip(jobs, results):
+            if path[0] == "areas":
+                area = snapshot["areas"].setdefault(path[1], {})
+                area[path[2]] = _as_float(value)
+            elif path[0] == "supply_units":
+                snapshot["supply_units"][path[1]] = _as_float(value)
+            elif path[0] == "radiant":
+                snapshot.setdefault("radiant", {})[path[1]] = _as_float(value)
+            elif path[0] == "vmc":
+                vmc = snapshot.setdefault("vmc", {"sensors": {}, "requests": {}, "alarms": {}})
+                if path[1] == "sensors":
+                    vmc["sensors"][path[2]] = _as_float(value)
+                elif path[1] == "requests":
+                    vmc["requests"][path[2]] = _as_bool(value)
+                else:
+                    vmc["alarms"][path[2]] = _as_bool(value)
+
+        def _check_values(d: dict[str, Any]) -> bool:
+            for v in d.values():
+                if isinstance(v, dict):
+                    if not _check_values(v):
+                        return False
+                elif v is None:
+                    return False
+            return True
+
+        if not _check_values(snapshot):
+            raise UpdateFailed("Missing data from one or more sensors")
+
+        self.async_set_updated_data(snapshot)
+        return snapshot
 
     async def async_start_fast_loop(self) -> None:
         if self._fast_task:
