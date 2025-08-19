@@ -2,49 +2,59 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Mapping
 
 import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.helpers import selector
-from homeassistant.const import CONF_NAME, CONF_UNIQUE_ID
+from homeassistant.const import (
+    CONF_NAME,
+    CONF_UNIQUE_ID,
+    CONF_TEMPERATURE_UNIT,
+)
 
-# Tipi flow: garantiamo compatibilità HA 2025.4.4 con fallback
+# Tipi flow: garantiamo compatibilità (2025.4.4 e fallback)
 from homeassistant.config_entries import ConfigFlow, OptionsFlow
 try:
-    # Presente nelle versioni recenti
     from homeassistant.config_entries import ConfigFlowResult  # type: ignore
 except Exception:  # pragma: no cover
-    # Fallback raro (per sicurezza): usa FlowResult generico
     from homeassistant.data_entry_flow import FlowResult as ConfigFlowResult  # type: ignore
 
 try:
-    # In alcune versioni manca OptionsFlowResult
     from homeassistant.config_entries import OptionsFlowResult  # type: ignore
 except Exception:  # pragma: no cover
     from homeassistant.data_entry_flow import FlowResult as OptionsFlowResult  # type: ignore
 
-from .const import DOMAIN, INTEGRATION_NAME
+from .const import (
+    DOMAIN,
+    INTEGRATION_NAME,
+    # Chiavi usate nello YAML/schema
+    CONF_AREA,
+    CONF_AREAS,
+    CONF_DEVICES,
+    CONF_SCENARIOS,
+    CONF_HOME_WINDOWS_STATE,
+    CONF_WEATHER,
+    CONF_TEMPERATURE,
+    CONF_HUMIDITY,
+    CONF_VACATION,
+    CONF_NOBODYSIN,
+    CONF_MAX_TEMP,
+    CONF_MIN_TEMP,
+    CONF_STEP,
+    DEFAULT_TEMP_UNIT,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
 # -------------------------
-# Chiavi dati / opzioni
+# Chiavi dati / opzioni (flow)
 # -------------------------
 CONF_HUB_NAME = "hub_name"
 CONF_CLIMATE_NAME = "climate_name"
 CONF_CLIMATE_UNIQUE_ID = "climate_unique_id"
-
-# Riferimenti globali
-CONF_HOME_WINDOWS_STATE = "home_windows_state"
-CONF_WEATHER = "weather"
-
-# Oggetti complessi (struttura simile alla YAML)
-CONF_AREAS = "areas"
-CONF_DEVICES = "devices"
-CONF_SCENARIOS = "scenarios"
 
 # Opzioni runtime (allineate al runtime_config)
 OPT_UPDATE_INTERVAL_S = "update_interval_s"
@@ -68,50 +78,64 @@ def _normalize_yaml_hub(hub: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _validate_areas(areas: list[dict]) -> Optional[str]:
-    """Validazione minima per il blocco 'areas'."""
+    """Validazione conforme allo schema: sensors.temperature E sensors.humidity sono obbligatori."""
     if not isinstance(areas, list):
         return "Il campo 'areas' deve essere una lista."
     seen: set[str] = set()
     for a in areas:
         if not isinstance(a, dict):
             return "Ogni area deve essere un oggetto."
-        n = a.get("area")
+        n = a.get(CONF_AREA)
         if not n or not isinstance(n, str):
             return "Ogni area deve avere 'area' (stringa)."
         if n in seen:
             return f"Area duplicata: {n}"
         seen.add(n)
 
-        sens = a.get("sensors", {})
-        if not isinstance(sens, dict) or "temperature" not in sens:
-            return f"L'area '{n}' deve avere sensors.temperature."
-        # humidity rimane opzionale
+        sens = a.get("sensors")
+        if not isinstance(sens, dict):
+            return f"L'area '{n}' deve avere 'sensors'."
+        if CONF_TEMPERATURE not in sens or CONF_HUMIDITY not in sens:
+            return f"L'area '{n}' deve avere sensors.temperature E sensors.humidity."
     return None
 
 
 def _validate_devices(dev: dict) -> Optional[str]:
-    """Validazione minima dei blocchi devices."""
+    """Validazione minima dei blocchi devices (profonda demandata al runtime builder)."""
     if dev is None:
         return None
     if not isinstance(dev, dict):
         return "Il campo 'devices' deve essere un oggetto."
-    # Aggiungi qui eventuali check specifici (supply_units/radiant/vmc)
+    # Check superficiali sui blocchi noti: se presenti, devono essere object
+    for blk in ("supply_units", "radiant", "vmc"):
+        if blk in dev and not isinstance(dev[blk], dict):
+            return f"'devices.{blk}' deve essere un oggetto."
     return None
 
 
 def _validate_scenarios(sc: dict) -> Optional[str]:
+    """Validazione conforme allo schema: vacation e nobodysin obbligatori (stringhe)."""
     if sc is None:
-        return None
+        return "Il campo 'scenarios' è obbligatorio."
     if not isinstance(sc, dict):
         return "Il campo 'scenarios' deve essere un oggetto."
+    for key in (CONF_VACATION, CONF_NOBODYSIN):
+        v = sc.get(key)
+        if not isinstance(v, str) or not v:
+            return f"'scenarios.{key}' è obbligatorio e deve essere una stringa."
     return None
 
 
 def _yaml_climate_to_entry_payload(hub_name: str, climate: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, Any]]:
     """
     Converte un blocco 'climate' YAML in (entry.data, entry.options).
-    - data: informazioni identitarie/immutabili
-    - options: configurazioni runtime e strutture complesse
+
+    data:
+      - hub_name, climate_name, climate_unique_id, home_windows_state, weather
+    options:
+      - strutture complesse: areas, devices, scenarios
+      - runtime defaults: update_interval_s, supports_*, setpoint_step_c, manual_override_minutes
+      - parametri climatici: max/min/step/temperature_unit
     """
     climate_name = climate.get(CONF_NAME) or climate.get("name")
     uid = climate.get(CONF_UNIQUE_ID) or climate.get("unique_id")
@@ -122,7 +146,17 @@ def _yaml_climate_to_entry_payload(hub_name: str, climate: Dict[str, Any]) -> tu
     home_windows_state = climate.get(CONF_HOME_WINDOWS_STATE)
     weather = climate.get(CONF_WEATHER)
 
+    # Parametri climatici (con default come nello schema)
+    max_temp = climate.get(CONF_MAX_TEMP, 35)
+    min_temp = climate.get(CONF_MIN_TEMP, 5)
+    step = climate.get(CONF_STEP, 0.5)
+    temp_unit = climate.get(CONF_TEMPERATURE_UNIT, DEFAULT_TEMP_UNIT)
+
     # Validazioni minime
+    if home_windows_state is None:
+        raise ValueError("Manca 'home_windows_state' (obbligatorio).")
+    if weather is None:
+        raise ValueError("Manca 'weather' (obbligatorio).")
     err = _validate_areas(areas)
     if err:
         raise ValueError(err)
@@ -132,6 +166,15 @@ def _yaml_climate_to_entry_payload(hub_name: str, climate: Dict[str, Any]) -> tu
     err = _validate_scenarios(scenarios)
     if err:
         raise ValueError(err)
+
+    # Coerenza minima max/min
+    try:
+        max_t = float(max_temp)
+        min_t = float(min_temp)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError("max_temp/min_temp devono essere numerici.") from exc
+    if min_t >= max_t:
+        raise ValueError("min_temp deve essere < max_temp.")
 
     data: Dict[str, Any] = {
         CONF_HUB_NAME: hub_name,
@@ -152,6 +195,11 @@ def _yaml_climate_to_entry_payload(hub_name: str, climate: Dict[str, Any]) -> tu
         OPT_SUPPORTS_DEHUMIDIFYING: False,
         OPT_SETPOINT_STEP_C: 0.5,
         OPT_MANUAL_OVERRIDE_MIN: 90,
+        # parametri climatici
+        CONF_MAX_TEMP: max_t,
+        CONF_MIN_TEMP: min_t,
+        CONF_STEP: float(step),
+        CONF_TEMPERATURE_UNIT: str(temp_unit),
     }
     return data, options
 
@@ -173,12 +221,13 @@ class DrpClimateMasterConfigFlow(ConfigFlow, domain=DOMAIN):
             hub_name = user_input[CONF_HUB_NAME]
             climate_name = user_input[CONF_CLIMATE_NAME]
             unique_id = user_input[CONF_CLIMATE_UNIQUE_ID]
-            home_windows = user_input.get(CONF_HOME_WINDOWS_STATE)
-            weather = user_input.get(CONF_WEATHER)
+            home_windows = user_input[CONF_HOME_WINDOWS_STATE]
+            weather = user_input[CONF_WEATHER]
 
-            # Unicità basata su unique_id del climate
-            await self.async_set_unique_id(unique_id)
-            self._abort_if_unique_id_configured()
+            # Unicità basata su unique_id del climate (se fornita)
+            if unique_id:
+                await self.async_set_unique_id(unique_id)
+                self._abort_if_unique_id_configured()
 
             data = {
                 CONF_HUB_NAME: hub_name,
@@ -188,6 +237,7 @@ class DrpClimateMasterConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_WEATHER: weather,
             }
 
+            # Valori di default coerenti con schema (le strutture si editano in Options)
             options = {
                 CONF_AREAS: [],
                 CONF_DEVICES: {},
@@ -198,6 +248,11 @@ class DrpClimateMasterConfigFlow(ConfigFlow, domain=DOMAIN):
                 OPT_SUPPORTS_DEHUMIDIFYING: False,
                 OPT_SETPOINT_STEP_C: 0.5,
                 OPT_MANUAL_OVERRIDE_MIN: 90,
+                # parametri climatici (default schema)
+                CONF_MAX_TEMP: 35.0,
+                CONF_MIN_TEMP: 5.0,
+                CONF_STEP: 0.5,
+                CONF_TEMPERATURE_UNIT: str(DEFAULT_TEMP_UNIT),
             }
 
             return self.async_create_entry(
@@ -211,10 +266,10 @@ class DrpClimateMasterConfigFlow(ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_HUB_NAME): str,
                 vol.Required(CONF_CLIMATE_NAME): str,
                 vol.Required(CONF_CLIMATE_UNIQUE_ID): str,
-                vol.Optional(CONF_HOME_WINDOWS_STATE): selector.EntitySelector(
+                vol.Required(CONF_HOME_WINDOWS_STATE): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain="binary_sensor")
                 ),
-                vol.Optional(CONF_WEATHER): selector.EntitySelector(
+                vol.Required(CONF_WEATHER): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain="weather")
                 ),
             }
@@ -227,8 +282,7 @@ class DrpClimateMasterConfigFlow(ConfigFlow, domain=DOMAIN):
         if not hubs:
             return self.async_abort(reason="invalid_yaml")
 
-        # Importiamo il PRIMO climate valido trovato (comportamento standard HA);
-        # se desideri importare più entry, potresti iterare e crearne più.
+        # Importiamo il PRIMO climate valido trovato (pattern comune nei componenti HA)
         for hub in hubs:
             hub_norm = _normalize_yaml_hub(hub)
             hub_name = hub_norm.get(CONF_NAME, "Unnamed Hub")
@@ -287,19 +341,57 @@ class DrpClimateMasterOptionsFlowHandler(OptionsFlow):
         )
 
     async def async_step_general(self, user_input: dict[str, Any] | None = None) -> OptionsFlowResult:
-        """Opzioni runtime generali."""
+        """Opzioni runtime generali + parametri climatici (max/min/step/unit)."""
+        cur: Mapping[str, Any] = self.entry.options
+
         if user_input is not None:
-            new_options = dict(self.entry.options)
+            # Validazione coerenza min/max
+            try:
+                max_t = float(user_input[CONF_MAX_TEMP])
+                min_t = float(user_input[CONF_MIN_TEMP])
+            except Exception:  # noqa: BLE001
+                return self.async_show_form(
+                    step_id="general",
+                    data_schema=self._general_schema(cur),
+                    errors={"base": "Valori non numerici per min/max temp."},
+                )
+            if min_t >= max_t:
+                return self.async_show_form(
+                    step_id="general",
+                    data_schema=self._general_schema(cur),
+                    errors={"base": "min_temp deve essere < max_temp."},
+                )
+
+            new_options: Dict[str, Any] = dict(cur)  # copia mutabile
+            # runtime
             new_options[OPT_UPDATE_INTERVAL_S] = user_input[OPT_UPDATE_INTERVAL_S]
             new_options[OPT_SUPPORTS_HEATING] = user_input[OPT_SUPPORTS_HEATING]
             new_options[OPT_SUPPORTS_COOLING] = user_input[OPT_SUPPORTS_COOLING]
             new_options[OPT_SUPPORTS_DEHUMIDIFYING] = user_input[OPT_SUPPORTS_DEHUMIDIFYING]
             new_options[OPT_SETPOINT_STEP_C] = float(user_input[OPT_SETPOINT_STEP_C])
             new_options[OPT_MANUAL_OVERRIDE_MIN] = user_input[OPT_MANUAL_OVERRIDE_MIN]
+            # climatici
+            new_options[CONF_MAX_TEMP] = max_t
+            new_options[CONF_MIN_TEMP] = min_t
+            new_options[CONF_STEP] = float(user_input[CONF_STEP])
+            new_options[CONF_TEMPERATURE_UNIT] = str(user_input[CONF_TEMPERATURE_UNIT])
+
             return self.async_create_entry(title="", data=new_options)
 
-        cur = self.entry.options
-        data_schema = vol.Schema(
+        return self.async_show_form(step_id="general", data_schema=self._general_schema(cur))
+
+    def _general_schema(self, cur: Mapping[str, Any]) -> vol.Schema:
+        """Schema per le opzioni generali."""
+        # Unità temperatura: manteniamo stringhe per allineamento allo YAML (es. "C"/"F")
+        unit_default = str(cur.get(CONF_TEMPERATURE_UNIT, DEFAULT_TEMP_UNIT)).upper()
+        temp_unit_selector = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=["C", "F"],
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            )
+        )
+
+        return vol.Schema(
             {
                 vol.Required(OPT_UPDATE_INTERVAL_S, default=cur.get(OPT_UPDATE_INTERVAL_S, 30)): vol.All(int, vol.Range(min=5, max=3600)),
                 vol.Required(OPT_SUPPORTS_HEATING, default=cur.get(OPT_SUPPORTS_HEATING, True)): bool,
@@ -307,9 +399,13 @@ class DrpClimateMasterOptionsFlowHandler(OptionsFlow):
                 vol.Required(OPT_SUPPORTS_DEHUMIDIFYING, default=cur.get(OPT_SUPPORTS_DEHUMIDIFYING, False)): bool,
                 vol.Required(OPT_SETPOINT_STEP_C, default=cur.get(OPT_SETPOINT_STEP_C, 0.5)): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=2.0)),
                 vol.Required(OPT_MANUAL_OVERRIDE_MIN, default=cur.get(OPT_MANUAL_OVERRIDE_MIN, 90)): vol.All(int, vol.Range(min=5, max=720)),
+                # climatici
+                vol.Required(CONF_MAX_TEMP, default=cur.get(CONF_MAX_TEMP, 35.0)): vol.Coerce(float),
+                vol.Required(CONF_MIN_TEMP, default=cur.get(CONF_MIN_TEMP, 5.0)): vol.Coerce(float),
+                vol.Required(CONF_STEP, default=cur.get(CONF_STEP, 0.5)): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=2.0)),
+                vol.Required(CONF_TEMPERATURE_UNIT, default=unit_default): temp_unit_selector,
             }
         )
-        return self.async_show_form(step_id="general", data_schema=data_schema)
 
     async def async_step_structure(self, user_input: dict[str, Any] | None = None) -> OptionsFlowResult:
         """Modifica la struttura complessa tramite selector Object (aree/devices/scenarios)."""
@@ -318,7 +414,7 @@ class DrpClimateMasterOptionsFlowHandler(OptionsFlow):
             devices = user_input.get(CONF_DEVICES, {})
             scenarios = user_input.get(CONF_SCENARIOS, {})
 
-            # Validazioni minime
+            # Validazioni minime (allineate allo schema)
             err = _validate_areas(areas)
             if err:
                 return self.async_show_form(
@@ -341,7 +437,7 @@ class DrpClimateMasterOptionsFlowHandler(OptionsFlow):
                     errors={"base": err},
                 )
 
-            new_options = dict(self.entry.options)
+            new_options: Dict[str, Any] = dict(self.entry.options)
             new_options[CONF_AREAS] = areas
             new_options[CONF_DEVICES] = devices
             new_options[CONF_SCENARIOS] = scenarios
@@ -351,7 +447,7 @@ class DrpClimateMasterOptionsFlowHandler(OptionsFlow):
 
     def _structure_schema(self) -> vol.Schema:
         """Schema con selector Object per strutture JSON-like (compatibile 2025.4.4)."""
-        cur = self.entry.options
+        cur: Mapping[str, Any] = self.entry.options
         return vol.Schema(
             {
                 vol.Required(CONF_AREAS, default=cur.get(CONF_AREAS, [])): selector.ObjectSelector(),

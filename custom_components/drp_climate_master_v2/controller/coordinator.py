@@ -1,174 +1,192 @@
 # custom_components/drp_climate/coordinator.py
-"""
-DRP Climate Master v2 — COORDINATOR
-===================================
-
-RUOLO (in breve)
-----------------
-Il Coordinator è l'orchestratore **data-driven**: legge sensori/entità di Home Assistant,
-costruisce uno **snapshot coerente** dello stato dell'impianto (PlantSnapshot) e
-fornisce un loop di controllo rapido per i regolatori locali (es. PID della miscelatrice,
-controllo umidità VMC). È la **singola fonte di verità** a cui si appoggiano Supervisor
-e le Entity (CoordinatorEntity).
-
-RESPONSABILITÀ PRINCIPALI
--------------------------
-1) **Acquisizione dati** (loop SLOW con DataUpdateCoordinator):
-   - Legge T/H per area, T_out/H_out, T_supply/T_return, stati attuatori, richieste VMC, allarmi.
-   - Calcola grandezze derivate (dew point stanza, VPD, entalpia esterna, flag free cooling).
-   - Stima domanda per zona (weighted demand) e aggiorna il PlantSnapshot.
-
-2) **Controlli locali** (loop FAST interno):
-   - Applica il **PID 3-punti** della valvola miscelatrice verso `T_supply_target`.
-   - Regola la **deumidifica VMC** verso `target_rh_pct` (PID H%).
-   - Fa rispettare **runtime guards** (min_on/min_off) e **rate-limit** ai comandi.
-
-3) **Persistenza configurazione**:
-   - Carica la `PlantConfig` consolidata (da config_flow/options o import legacy).
-   - Espone i parametri di controllo (PID, soglie dew-point, policy free-cooling).
-
-4) **Pubblicazione stato**:
-   - Mantiene `self.snapshot` (PlantSnapshot) sempre consistente.
-   - Notifica gli observer (Supervisor, Entity) quando ci sono aggiornamenti validi.
-
-5) **Affidabilità & sicurezza**:
-   - Protegge da errori di I/O e mancanza di entità; applica fallback/valori sicuri.
-   - Non blocca mai il thread di evento di HA (tutte le operazioni sono async).
-
-INTERAZIONI
------------
-- Con **Adapters**: unico punto di accesso a entità HA (letture/atti). Gli Adapters 
-  implementano retry/backoff, clamp e validazioni.
-- Con **Supervisor**: il Supervisor legge `snapshot` e decide la strategia high-level;
-  il Coordinator non decide modalità HVAC, ma fornisce dati e applica controlli locali.
-- Con **ClimateEntity**: le entity ereditano da `CoordinatorEntity` e leggono lo snapshot
-  per UI/telemetria.
-
-LOOP E TEMPISTICHE
-------------------
-- SLOW: 30-60 s (DataUpdateCoordinator) → sensori, psicrometria, domanda zone, flags.
-- FAST: 5-10 s (task interno) → PID miscelatrice, PID umidità VMC, runtime guards.
-
-INGRESSI / USCITE
------------------
-- Ingressi: entità HA (sensori/attuatori), opzioni/parametri da config entry.
-- Uscite: comandi verso attuatori (tramite Adapters), PlantSnapshot aggiornato.
-
-INVARIANTI & LINEE GUIDA
-------------------------
-- Nessun **side-effect** nel metodo `_async_update_data` oltre alle letture/calcoli.
-- PlantSnapshot deve essere **auto-consistente** in ogni istante.
-- I comandi agli attuatori passano **solo** dagli Adapters (mai diretti dal Coordinator).
-- Tutte le eccezioni del loop SLOW producono `UpdateFailed` e non interrompono il servizio.
-- Il loop FAST deve essere **idempotente** e **tollerante** a snapshot parziali.
-
-ANTI-PATTERN (da evitare)
--------------------------
-- Mettere decisioni high-level (scelta modalità HVAC) qui dentro → competenza del Supervisor.
-- Fare I/O bloccante o cicli `sleep` lunghi nel thread di evento.
-- Accedere direttamente a `hass.services`/`hass.states` fuori dagli Adapters.
-"""
-
 from __future__ import annotations
 
 import asyncio
-import logging
 import contextlib
-
-from dataclasses import dataclass
-from typing import Any, TYPE_CHECKING
+import logging
+from typing import Any, Optional, List
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, Event, EventStateChangedData
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.core import HomeAssistant, Event, EventStateChangedData, callback
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from ..helpers.config_entries import build_runtime_config, collect_entity_ids_for_state_changes, subscribe_entity_state_changes
-
+from ..helpers.config_entries import (
+    build_runtime_config,
+    collect_entity_ids_for_state_changes,
+    subscribe_entity_state_changes,
+)
+from ..sensor import DewpointSensor
 from ..const import DOMAIN, ENTITIES_STATE
 
 _LOGGER = logging.getLogger(__name__)
 
-# ------------------------------ Setup platform ------------------------------ #
-async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities
-) -> None:
-    """Crea le entity Climate a partire dal coordinator."""
-
-# -----------------------------------------------------------------------------
-# Coordinator
-# -----------------------------------------------------------------------------
 
 class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """
     Coordina:
       - Lettura sensori (ports/sensors)
-      - Calcolo setpoint/decisioni (engine)   [TODO: collega il tuo motore]
-      - Applicazione comandi (ports/actuators)
-    Espone:
-      - current_env / current_weather
-      - last_setpoint / last_decision / controller_state
-      - capabilities
+      - Calcolo grandezze derivate (psicrometria, domanda, flag)
+      - Pubblicazione snapshot per Entity/Supervisor
+    NON decide la strategia HVAC (competenza del Supervisor).
     """
-
-    # ------------------------ init & lifecycle ------------------------ #
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self._hass = hass
         self._entry = entry
 
-        # Config di runtime e adapter I/O
-        self._runtime = build_runtime_config(entry)
-        _LOGGER.debug("Runtime config %s", self._runtime)
-        eids = collect_entity_ids_for_state_changes(self._runtime)
-        subscribe_entity_state_changes(self._hass, callback=self._async_entity_changed, entity_ids=eids)
+        # Inizializza la struttura dati una volta e tieni il riferimento
+        domain_store = hass.data.setdefault(DOMAIN, {})
+        entry_store = domain_store.setdefault(entry.entry_id, {})
+        entry_store.setdefault(ENTITIES_STATE, {})  # dict[str, State]
+        self._entities_state_store: dict = entry_store[ENTITIES_STATE]
 
-        self._fast_task: asyncio.Task | None = None
+        # Config di runtime e subscribe ai cambi di stato
+        self._runtime = build_runtime_config(entry)
+        # _LOGGER.debug("Runtime config %s", self._runtime)
+
+        eids = collect_entity_ids_for_state_changes(self._runtime)
+        # Conserva l'unsubscribe per lo stop/unload
+        self._unsub_state_changes = subscribe_entity_state_changes(
+            self._hass, callback=self.entity_changed, entity_ids=eids
+        )
+
+        # Loop FAST
+        self._fast_task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
 
         super().__init__(
             hass,
             _LOGGER,
             name=f"{DOMAIN}-coordinator",
-            update_interval=self._runtime.update_interval,
+            update_interval=self._runtime.update_interval,  # loop SLOW
         )
 
-        _LOGGER.debug("__init__ end.")
+        _LOGGER.debug("ClimateCoordinator initialized")
+
+    # ----------------- Accesso allo store condiviso ----------------- #
 
     @property
     def _entities_state(self) -> dict:
         """
-        Restituisce il dizionario delle entità Home Assistant attive.
-
-        Returns:
-            dict: Mappa degli stati delle entità registrate in Home Assistant.
+        Mappa entity_id -> State (idempotente anche se hass.data viene ricreato).
         """
-        return self._hass.data[DOMAIN][self._entry.entry_id][ENTITIES_STATE]
-    
-    async def _async_entity_changed(self, event: Event[EventStateChangedData]):
-        """Handle sensor changes."""
+        domain_store = self._hass.data.setdefault(DOMAIN, {})
+        entry_store = domain_store.setdefault(self._entry.entry_id, {})
+        return entry_store.setdefault(ENTITIES_STATE, self._entities_state_store)
+
+    # ----------------- Setup delle entity "slave" ------------------- #
+
+    async def async_setup_slave_entities(self) -> List[Any]:
+        """
+        Crea e registra le entity "slave" (es. sensori di dew-point per area).
+        """
+        slave_sensors = []
+
+        # Presumo che self._runtime.climate.areas sia una lista di oggetti con
+        # attributi: .indoor (bool), .name (str), .sensors (compatibile con DewpointSensor)
+        for area in getattr(self._runtime.climate, "areas", []):
+            if not getattr(area, "indoor", False):
+                continue
+
+            sensors = getattr(area, "sensors", None)
+            if not sensors:
+                _LOGGER.debug("Area '%s' senza sensors; salto", getattr(area, "name", "?"))
+                continue
+
+            entity_name = f"Ambient {area.name}"
+            temperature_unit = self._runtime.climate.temperature_unit
+
+            slave_sensors.append(
+                DewpointSensor(
+                    hass=self._hass,
+                    coordinator=self,
+                    entry=self._entry,
+                    name=entity_name,
+                    sensors=sensors,
+                    temperature_unit=temperature_unit,
+                )
+            )
+
+        return slave_sensors
+    # ---------------------- Event handling -------------------------- #
+
+    @callback
+    def entity_changed(self, event: Event[EventStateChangedData]) -> None:
+        """Gestisce variazioni di stato sensori/attuatori sottoscritti."""
+        if self._stop_event.is_set():
+            return
+
         entity_id = event.data.get("entity_id")
         new_state = event.data.get("new_state")
-        self._entities_state[entity_id] = new_state
-        # _LOGGER.debug( "_async_entity_changed '%s' status change '%s'.", str(entity_id), str(new_state) )
+        if not entity_id or new_state is None:
+            return
+
+        try:
+            self._entities_state[entity_id] = new_state
+            # _LOGGER.debug("State changed: %s -> %s", entity_id, new_state.state)
+        except Exception as ex:  # estrema difesa: non far mai esplodere il job
+            _LOGGER.debug("Ignore state change for %s (%s)", entity_id, ex)
+
+    # ---------------------- Lifecycle hooks ------------------------- #
 
     async def async_config_entry_first_refresh(self) -> None:
-        """Primo refresh con gestione UpdateFailed → ConfigEntryNotReady a monte."""
+        """Primo refresh: dopo il SLOW loop, avvia il FAST loop."""
         await super().async_config_entry_first_refresh()
         _LOGGER.debug("First refresh completed")
+        await self.async_start_fast_loop()
 
     async def async_start_fast_loop(self) -> None:
+        """Avvia il loop FAST (PID miscelatrice / H% VMC / rate limit)."""
         if self._fast_task:
             return
         self._stop_event.clear()
         self._fast_task = asyncio.create_task(self._fast_loop(), name="drp_fast_loop")
 
     async def async_stop(self) -> None:
+        """Stop coordinato del loop FAST e unsubscription eventi."""
         self._stop_event.set()
+
         if self._fast_task:
             self._fast_task.cancel()
             with contextlib.suppress(Exception):
                 await self._fast_task
-        self._fast_task = None
+            self._fast_task = None
+
+        # Unsubscribe ai cambi stato se presente
+        unsub = getattr(self, "_unsub_state_changes", None)
+        if callable(unsub):
+            with contextlib.suppress(Exception):
+                unsub()
 
     async def _fast_loop(self) -> None:
-        """Ciclo FAST: PID miscelatrice, H% VMC, rate-limit comandi."""
+        """
+        Ciclo FAST: esegue controlli locali con cadenza breve.
+        Deve essere idempotente e tollerante a snapshot parziali.
+        """
+        interval = getattr(self._runtime, "fast_interval", 5)  # fallback 5s
+        try:
+            while not self._stop_event.is_set():
+                # TODO: PID miscelatrice verso T_supply_target
+                # TODO: PID deumidifica VMC verso target_rh_pct
+                # TODO: rate-limit, min_on/min_off, guardie runtime
+                await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            pass
+
+    # --------------------- DataUpdateCoordinator -------------------- #
+
+    async def _async_update_data(self) -> dict[str, Any]:
+        """
+        Loop SLOW: raccoglie sensori, calcola grandezze derivate e aggiorna lo snapshot.
+        Importante: niente side-effect (niente comandi agli attuatori).
+        """
+        try:
+            # TODO: leggere da adapters e costruire snapshot parziale
+            # Esempio:
+            # snapshot = {
+            #     "timestamp": self._hass.helpers.event.async_call_later(...),
+            #     "areas": {...},
+            # }
+            return {}
+        except Exception as exc:
+            raise UpdateFailed(f"Update failed: {exc}") from exc

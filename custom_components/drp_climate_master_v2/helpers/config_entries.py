@@ -17,6 +17,7 @@ from homeassistant.const import (
     CONF_TEMPERATURE_UNIT,
 )
 
+from ..helpers.utils import as_int
 from ..domain.models import (
     AreaConfig,
     ClimateConfig,
@@ -39,7 +40,6 @@ from ..domain.models import (
     VMCRequestsConfig,
     VMCSensorsConfig
 )
-from ..helpers.utils import _as_int
 from ..const import (
     CONF_ADJUSTABLE_SUPPLY_UNIT,
     CONF_ALARMS,
@@ -78,6 +78,7 @@ from ..const import (
     CONF_VENT_RECIRCULATION,
     CONF_VMC,
     CONF_WEATHER,
+    DEFAULT_TEMP_UNIT,
     OPT_UPDATE_INTERVAL_S,
 )
 
@@ -183,15 +184,17 @@ def _infer_capabilities_from_devices(options: Mapping[str, Any]) -> tuple[bool, 
     return supports_heating, supports_cooling, supports_dehumidifying, supports_ventilation
 
 def build_runtime_config(entry: ConfigEntry) -> RuntimeConfig:
-    opts: Mapping[str, Any] = entry.options or {}
+    climate_cfg: Mapping[str, Any] = entry.options or {}
+    # _LOGGER.debug("build_runtime_config (entry.data) %s", entry.data)
+    # _LOGGER.debug("build_runtime_config (entry.options) %s", entry.options)
 
     # update_s = _as_int(opts.get(OPT_UPDATE_INTERVAL_S, 30), 30)
-    update_interval = timedelta(seconds=max(30, _as_int(OPT_UPDATE_INTERVAL_S, 30, min_value=30, max_value=300) or 30))
+    update_interval = timedelta(seconds=max(30, as_int(OPT_UPDATE_INTERVAL_S, 30, min_value=30, max_value=300) or 30))
     
     supports_heating,\
     supports_cooling,\
     supports_dehumidifying,\
-    supports_ventilation = _infer_capabilities_from_devices(opts)
+    supports_ventilation = _infer_capabilities_from_devices(climate_cfg)
     # supports_heating = _as_bool(opts.get(OPT_SUPPORTS_HEATING, ih), ih)
     # supports_cooling = _as_bool(opts.get(OPT_SUPPORTS_COOLING, ic), ic)
     # supports_dehumidifying = _as_bool(
@@ -204,7 +207,7 @@ def build_runtime_config(entry: ConfigEntry) -> RuntimeConfig:
     # )
 
     # ----- Climate -------------------------------------------------------
-    climate_cfg = (opts.get(CONF_CLIMATE) or [])[0]
+    # climate_cfg = (opts.get(CONF_CLIMATE) or [])[0]
     areas = [
         AreaConfig(
             name=a[CONF_AREA],
@@ -267,15 +270,16 @@ def build_runtime_config(entry: ConfigEntry) -> RuntimeConfig:
         )
 
     climate = ClimateConfig(
-        name=climate_cfg[CONF_NAME],
-        unique_id=climate_cfg[CONF_UNIQUE_ID],
+        name=entry.data["climate_name"],
+        unique_id=entry.data["climate_unique_id"],
         areas=areas,
         devices=DevicesConfig(
             supply_units=supply_units, radiant=radiant, vmc=vmc
         ),
-        home_windows_state=climate_cfg[CONF_HOME_WINDOWS_STATE],
-        weather=climate_cfg[CONF_WEATHER],
+        home_windows_state=entry.data[CONF_HOME_WINDOWS_STATE],
+        weather=entry.data[CONF_WEATHER],
         scenarios=ScenariosConfig(**climate_cfg[CONF_SCENARIOS]),
+        temperature_unit=climate_cfg.get(CONF_TEMPERATURE_UNIT, DEFAULT_TEMP_UNIT),
     )
 
     caps = PlantCapabilities(

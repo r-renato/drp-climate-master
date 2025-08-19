@@ -155,6 +155,7 @@ class ClimateConfig:
     home_windows_state: str
     weather: str
     scenarios: ScenariosConfig
+    temperature_unit: str
 
 # ---- Runtime -------------------------------------------------------------
 @dataclass(frozen=True)

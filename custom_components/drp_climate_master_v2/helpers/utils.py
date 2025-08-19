@@ -25,7 +25,7 @@ def _clamp[T: (int|float)](value: T, min_value: T | None, max_value: T | None) -
         value = max_value
     return value
 
-def _as_bool(
+def as_bool(
     v: Any,
     default: bool | None = None,
     *,
@@ -60,7 +60,7 @@ def _as_bool(
         raise ValueError(f"Cannot coerce {v!r} to bool")
     return default
 
-def _as_float(
+def as_float(
     v: Any,
     default: float | None = None,
     *,
@@ -106,7 +106,7 @@ def _as_float(
     x = _clamp(x, min_value, max_value)
     return x
 
-def _as_int(
+def as_int(
     v: Any,
     default: int | None = None,
     *,
@@ -138,7 +138,7 @@ def _as_int(
     if isinstance(v, int):
         x = v
     else:
-        xf = _as_float(v, None, strict=strict)
+        xf = as_float(v, None, strict=strict)
         if xf is None:
             return default
         if rounding == "nearest":

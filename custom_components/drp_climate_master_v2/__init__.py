@@ -44,7 +44,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     # Conserva la YAML grezza (può tornare utile per debug/diagnostica)
     hass.data[DOMAIN]["yaml"] = domain_cfg
-
+    # _LOGGER.debug("async_setup (config) %s", domain_cfg)
     _LOGGER.info("%s: configurazione YAML rilevata, avvio import flow…", DOMAIN)
     # Avvia l’import: passerà dentro config_flow.async_step_import(...)
     # Passiamo l’intero 'config' così il flow può leggere la chiave DOMAIN.
@@ -72,11 +72,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     supervisor: ClimateSupervisor = ClimateSupervisor(hass=hass, coordinator=coordinator)
     await supervisor.async_start()
 
-    # Memorizza per entry_id
     hass.data[DOMAIN].setdefault(entry.entry_id, {})
     hass.data[DOMAIN][entry.entry_id][COORDINATOR] = coordinator
     hass.data[DOMAIN][entry.entry_id][SUPERVISOR] = supervisor
-    hass.data[DOMAIN][entry.entry_id][ENTITIES_STATE] = []
+    hass.data[DOMAIN][entry.entry_id][ENTITIES_STATE] = {}
 
     # Piattaforme (climate, sensor, ecc.)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

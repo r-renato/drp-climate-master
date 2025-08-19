@@ -61,7 +61,7 @@ STARTUP_MESSAGE = make_startup_banner(_META)
 
 # DOMAIN: Final = "drp_climate_master_v2"
 
-PLATFORMS = [Platform.CLIMATE]  # aggiungi Platform.SENSOR/NUMBER se in futuro esponi altre entità
+PLATFORMS = [Platform.SENSOR, Platform.CLIMATE]  # aggiungi Platform.SENSOR/NUMBER se in futuro esponi altre entità
 
 COORDINATOR: Final = "coordinator"
 SUPERVISOR: Final = "supervisor"
