@@ -117,7 +117,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any, Optional, List
 
 from homeassistant.components.sensor import (
     SensorEntity,
@@ -128,18 +128,21 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.const import UnitOfTemperature, EntityCategory
-# from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     CoordinatorEntity,
 )
 from homeassistant.helpers.device_registry import DeviceInfo
 
+from .controller.coordinator import ClimateCoordinator
+
 from .helpers.utils import slugify, as_float
 
 from .domain.models import SensorPair
 from .helpers.psychrometric import celsius_to_fahrenheit, dew_point_celsius
 from .const import (
+    COORDINATOR,
     DOMAIN,
     ENTITIES_STATE,
     INTEGRATION_MANUFACTURER,
@@ -149,7 +152,50 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback
+) -> None:
+    """Setup della piattaforma sensor per questa ConfigEntry.
 
+    - Recupera il Coordinator dallo store di integrazione
+    - Costruisce i DewpointSensor
+    - Li registra con async_add_entities
+    """
+    store = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
+    coordinator: ClimateCoordinator = store.get(COORDINATOR)
+    if coordinator is None:
+        _LOGGER.warning(
+            "Coordinator non trovato per entry %s: nessuna entity sensor aggiunta",
+            entry.entry_id,
+        )
+        return
+
+    entities: List[SensorEntity] = []
+    try:
+        for cfg in coordinator.build_slave_sensor_defs():
+            if cfg["type"] != "DewpointSensor":
+                entities.append(
+                    DewpointSensor(
+                        hass=hass,
+                        coordinator=coordinator,
+                        entry=entry,
+                        name=cfg["name"],
+                        sensors=cfg["sensors"],
+                        temperature_unit=cfg["unit"],
+                    )
+                )
+    except Exception as ex:  # noqa: BLE001
+        _LOGGER.exception("Errore durante creazione sensori dew-point: %s", ex)
+
+    if entities:
+        async_add_entities(entities)  # update_before_add=False di default
+        _LOGGER.debug("Aggiunte %d entità a %s.sensor", len(entities), DOMAIN)
+    else:
+        _LOGGER.debug("Nessuna entità sensor da aggiungere per %s", entry.entry_id)
+
+        
 class BaseSensor(
     CoordinatorEntity[DataUpdateCoordinator[dict[str, Any]]],
     RestoreSensor,

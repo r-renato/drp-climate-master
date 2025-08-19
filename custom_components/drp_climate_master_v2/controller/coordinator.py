@@ -76,6 +76,25 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     # ----------------- Setup delle entity "slave" ------------------- #
 
+    def build_slave_sensor_defs(self) -> list[dict[str, Any]]:
+        """Restituisce la lista dei sensori dew-point da creare (name/sensors/unit)."""
+        defs: list[dict[str, Any]] = []
+        
+        for area in getattr(self._runtime.climate, "areas", []):
+            if getattr(area, "indoor", False):
+                sensors = getattr(area, "sensors", None)
+                if sensors:
+                    defs.append(
+                        {
+                            "type" : "DewpointSensor",
+                            "name": f"Ambient {area.name}",
+                            "sensors": sensors,  # es. SensorPair o dict compatibile
+                            "unit": self._runtime.climate.temperature_unit,
+                        }
+                    )
+
+        return defs
+
     async def async_setup_slave_entities(self) -> List[Any]:
         """
         Crea e registra le entity "slave" (es. sensori di dew-point per area).
