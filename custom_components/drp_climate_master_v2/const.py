@@ -75,6 +75,8 @@ DEFAULT_TEMP_UNIT: Final[str] = "°C"
 
 OPT_UPDATE_INTERVAL_S: Final[int] = 60
 
+ENTITIES_STATE: Final[str] = "entities_state"
+
 # ======================================================
 # Schema
 # ======================================================

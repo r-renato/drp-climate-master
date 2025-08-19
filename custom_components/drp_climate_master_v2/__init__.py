@@ -12,6 +12,7 @@ from homeassistant.helpers.typing import ConfigType
 
 from .const import ( # es.: DOMAIN="drp_climate", PLATFORMS=[Platform.CLIMATE]
     DOMAIN,
+    ENTITIES_STATE,
     PLATFORMS,
     COORDINATOR,
     SUPERVISOR,
@@ -75,6 +76,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN].setdefault(entry.entry_id, {})
     hass.data[DOMAIN][entry.entry_id][COORDINATOR] = coordinator
     hass.data[DOMAIN][entry.entry_id][SUPERVISOR] = supervisor
+    hass.data[DOMAIN][entry.entry_id][ENTITIES_STATE] = []
 
     # Piattaforme (climate, sensor, ecc.)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

@@ -5,8 +5,8 @@ DRP Climate Master v2 — COORDINATOR
 
 RUOLO (in breve)
 ----------------
-Il Coordinator è l’orchestratore **data-driven**: legge sensori/entità di Home Assistant,
-costruisce uno **snapshot coerente** dello stato dell’impianto (PlantSnapshot) e
+Il Coordinator è l'orchestratore **data-driven**: legge sensori/entità di Home Assistant,
+costruisce uno **snapshot coerente** dello stato dell'impianto (PlantSnapshot) e
 fornisce un loop di controllo rapido per i regolatori locali (es. PID della miscelatrice,
 controllo umidità VMC). È la **singola fonte di verità** a cui si appoggiano Supervisor
 e le Entity (CoordinatorEntity).
@@ -46,8 +46,8 @@ INTERAZIONI
 
 LOOP E TEMPISTICHE
 ------------------
-- SLOW: 30–60 s (DataUpdateCoordinator) → sensori, psicrometria, domanda zone, flags.
-- FAST: 5–10 s (task interno) → PID miscelatrice, PID umidità VMC, runtime guards.
+- SLOW: 30-60 s (DataUpdateCoordinator) → sensori, psicrometria, domanda zone, flags.
+- FAST: 5-10 s (task interno) → PID miscelatrice, PID umidità VMC, runtime guards.
 
 INGRESSI / USCITE
 -----------------
@@ -76,21 +76,17 @@ import logging
 import contextlib
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
-import async_timeout
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from homeassistant.util import dt as dt_util
+from homeassistant.core import HomeAssistant, Event, EventStateChangedData
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-from ..helpers.config_entries import build_runtime_config
+from ..helpers.config_entries import build_runtime_config, collect_entity_ids_for_state_changes, subscribe_entity_state_changes
 
-from ..const import DOMAIN
+from ..const import DOMAIN, ENTITIES_STATE
 
 _LOGGER = logging.getLogger(__name__)
-
 
 # ------------------------------ Setup platform ------------------------------ #
 async def async_setup_entry(
@@ -117,12 +113,14 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # ------------------------ init & lifecycle ------------------------ #
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
-        self.hass = hass
-        self.entry = entry
+        self._hass = hass
+        self._entry = entry
 
         # Config di runtime e adapter I/O
-        self.runtime = build_runtime_config(entry)
-        _LOGGER.debug("Runtime config %s", self.runtime)
+        self._runtime = build_runtime_config(entry)
+        _LOGGER.debug("Runtime config %s", self._runtime)
+        eids = collect_entity_ids_for_state_changes(self._runtime)
+        subscribe_entity_state_changes(self._hass, callback=self._async_entity_changed, entity_ids=eids)
 
         self._fast_task: asyncio.Task | None = None
         self._stop_event = asyncio.Event()
@@ -131,25 +129,32 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             hass,
             _LOGGER,
             name=f"{DOMAIN}-coordinator",
-            update_interval=self.runtime.update_interval,
+            update_interval=self._runtime.update_interval,
         )
 
         _LOGGER.debug("__init__ end.")
+
+    @property
+    def _entities_state(self) -> dict:
+        """
+        Restituisce il dizionario delle entità Home Assistant attive.
+
+        Returns:
+            dict: Mappa degli stati delle entità registrate in Home Assistant.
+        """
+        return self._hass.data[DOMAIN][self._entry.entry_id][ENTITIES_STATE]
+    
+    async def _async_entity_changed(self, event: Event[EventStateChangedData]):
+        """Handle sensor changes."""
+        entity_id = event.data.get("entity_id")
+        new_state = event.data.get("new_state")
+        self._entities_state[entity_id] = new_state
+        # _LOGGER.debug( "_async_entity_changed '%s' status change '%s'.", str(entity_id), str(new_state) )
 
     async def async_config_entry_first_refresh(self) -> None:
         """Primo refresh con gestione UpdateFailed → ConfigEntryNotReady a monte."""
         await super().async_config_entry_first_refresh()
         _LOGGER.debug("First refresh completed")
-
-    async def _async_update_data(self) -> dict[str, Any]:
-        """
-        1) Legge sensori
-        2) Calcola setpoint
-        3) Decide azioni
-        4) Applica ai plant/valvole
-        """
-
-        return {}
 
     async def async_start_fast_loop(self) -> None:
         if self._fast_task:

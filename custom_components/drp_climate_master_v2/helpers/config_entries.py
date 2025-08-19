@@ -1,8 +1,13 @@
 # custom_components/drp_climate_master_v2/helpers/config_entries.py
+from __future__ import annotations
 
+import logging
+from dataclasses import is_dataclass, fields
 from datetime import timedelta
-from typing import Any, Mapping
+from typing import Any, Mapping, Callable, Iterable, Optional, Union, List
 
+from homeassistant.core import HomeAssistant, Event, CALLBACK_TYPE, callback, EventStateChangedData
+from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     CONF_NAME,
@@ -76,6 +81,90 @@ from ..const import (
     OPT_UPDATE_INTERVAL_S,
 )
 
+_LOGGER = logging.getLogger(__name__)
+
+def subscribe_entity_state_changes(
+    hass: HomeAssistant,
+    callback: Callable[[Event[EventStateChangedData]], Any],   # 👈 firma richiesta
+    entity_ids: Union[str, Iterable[str]],
+    *,
+    on_remove: Optional[Callable[[CALLBACK_TYPE], None]] = None,
+) -> Optional[CALLBACK_TYPE]:
+    """
+    Sottoscrive gli eventi `state_changed` per uno o più `entity_id` e restituisce
+    la **funzione di unsubscribe**.
+
+    Questo helper è un thin-wrapper su `async_track_state_change_event` che:
+    - accetta una stringa singola o un iterabile di `entity_id`;
+    - normalizza e **deduplica** gli ID vuoti o ripetuti;
+    - opzionalmente registra l’unsubscribe nel ciclo di vita passato in `on_remove`
+      (es. `entry.async_on_unload`, `entity.async_on_remove`).
+
+    Parametri
+    ---------
+    hass : HomeAssistant
+        Istanza di Home Assistant.
+    callback : Callable[[Event[EventStateChangedData]], Any]
+        Handler invocato su ogni evento `state_changed` degli entity monitorati.
+        Può essere sincrono (consigliato decorare con `@callback`) o `async def`.
+        Firma tip-safe: `def handler(event: Event[EventStateChangedData]) -> None`.
+    entity_ids : str | Iterable[str]
+        Uno o più `entity_id` (es. `"sensor.t_living"` o `["sensor.t_living", "sensor.h_living"]`).
+    on_remove : Callable[[CALLBACK_TYPE], None], opzionale
+        Funzione alla quale passare la `unsubscribe` per legarla al ciclo di vita
+        (es. `entry.async_on_unload`, `self.async_on_remove`).
+    log : bool, opzionale
+        Se `True` logga l’attivazione dell’ascolto.
+
+    Ritorno
+    -------
+    Optional[CALLBACK_TYPE]
+        La funzione di **unsubscribe** (richiamala per rimuovere il listener),
+        oppure `None` se `entity_ids` non contiene elementi validi.
+
+    Esempi
+    -------
+    >>> # In config entry setup:
+    >>> unsub = subscribe_entity_state_changes(
+    ...     hass,
+    ...     callback=my_handler,                              # def my_handler(e: Event[EventStateChangedData]) -> None
+    ...     entity_ids=["sensor.t_soggiorno", "sensor.h_soggiorno"],
+    ...     on_remove=entry.async_on_unload,                  # si pulisce da solo allo unload dell'entry
+    ... )
+    ...
+    >>> # Dentro una Entity:
+    >>> self._unsub = subscribe_entity_state_changes(
+    ...     self.hass, my_handler, "sensor.t_camera", on_remove=self.async_on_remove
+    ... )
+
+    Note
+    ----
+    - Preferisci handler **sincroni** con `@callback` per ridurre overhead.
+    - La firma della callback è tipizzata come `Event[EventStateChangedData]` per
+      essere compatibile con `async_track_state_change_event` su HA 2025.4.x+.
+    """
+    # Normalizza gli entity_id
+    ids: List[str]
+    if isinstance(entity_ids, str):
+        ids = [entity_ids]
+    else:
+        ids = [e for e in entity_ids if isinstance(e, str) and e.strip()]
+
+    if not ids:
+        _LOGGER.error("setup_entity_change: nessun entity_id valido.")
+        return None
+
+    unsubscribe: CALLBACK_TYPE = async_track_state_change_event(hass, ids, callback)
+    _LOGGER.info("setup_entity_change: ascolto attivo per %s", ", ".join(ids))
+
+    if on_remove is not None:
+        try:
+            on_remove(unsubscribe)
+        except Exception:
+            _LOGGER.exception("setup_entity_change: on_remove ha generato un'eccezione.")
+
+    return unsubscribe
+
 def _infer_capabilities_from_devices(options: Mapping[str, Any]) -> tuple[bool, bool, bool, bool]:
     """
     Deduce heating/cooling/dehumidifying capabilities from devices config
@@ -90,7 +179,6 @@ def _infer_capabilities_from_devices(options: Mapping[str, Any]) -> tuple[bool, 
 
     supports_heating = supports_cooling = bool(radiant)
     supports_dehumidifying = supports_ventilation  = bool(vmc)
-
 
     return supports_heating, supports_cooling, supports_dehumidifying, supports_ventilation
 
@@ -203,3 +291,103 @@ def build_runtime_config(entry: ConfigEntry) -> RuntimeConfig:
         manual_override_minutes=90,  # TODO: read from options if set
         climate=climate,
     )
+
+def collect_entity_ids_for_state_changes(runtime: "RuntimeConfig") -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+
+    def _looks_like_entity_id(s: str) -> bool:
+        return "." in s and " " not in s and s[0].islower()
+
+    def _add(e: object) -> None:
+        if isinstance(e, str):
+            s = e.strip()
+            if s and _looks_like_entity_id(s) and s not in seen:
+                seen.add(s)
+                out.append(s)
+
+    def _walk(obj: Any) -> None:
+        """Raccoglie ricorsivamente stringhe che paiono entity_id."""
+        if obj is None:
+            return
+        if isinstance(obj, str):
+            _add(obj)
+            return
+        # SOLO istanze dataclass (non classi): evita l'errore di typing con asdict
+        if is_dataclass(obj) and not isinstance(obj, type):
+            for f in fields(obj):
+                _walk(getattr(obj, f.name))
+            return
+        if isinstance(obj, Mapping):
+            for v in obj.values():
+                _walk(v)
+            return
+        if isinstance(obj, Iterable) and not isinstance(obj, (str, bytes, bytearray, dict)):
+            for v in obj:
+                _walk(v)
+            return
+        # altri tipi ignorati
+
+    climate = getattr(runtime, "climate", None)
+    if not climate:
+        return out
+
+    # --- AREE: sensori T/H + interruttore valvola collettore termico
+    for area in getattr(climate, "areas", []) or []:
+        sensors = getattr(area, "sensors", None)
+        if sensors:
+            _add(getattr(sensors, "temperature", None))
+            _add(getattr(sensors, "humidity", None))
+        _add(getattr(area, "thermal_collector_valve_switch", None))
+
+    # --- SUPPLY UNITS: attuatori + TUTTI i sensori
+    su = getattr(getattr(climate, "devices", None), "supply_units", None)
+    if su:
+        _add(getattr(su, "direct_supply_unit", None))
+        _add(getattr(su, "adjustable_supply_unit", None))
+        _add(getattr(su, "three_point_mixing_valve", None))
+        _walk(getattr(su, "sensors", None))
+
+    # --- RADIANT (se presente): top-level + mode/setpoint/sensors
+    radiant = getattr(getattr(climate, "devices", None), "radiant", None)
+    if radiant:
+        _add(getattr(radiant, "fm_power", None))
+        _add(getattr(radiant, "power", None))
+        _walk(getattr(radiant, "mode", None))
+        _walk(getattr(radiant, "heating_t_setpoint", None))
+        _walk(getattr(radiant, "heating_dt_setpoint", None))
+        _walk(getattr(radiant, "cooling_t_setpoint", None))
+        _walk(getattr(radiant, "cooling_dt_setpoint", None))
+        _walk(getattr(radiant, "sensors", None))
+
+    # --- VMC (se presente): top-level + season/management/requests/sensors/alarms
+    vmc = getattr(getattr(climate, "devices", None), "vmc", None)
+    if vmc:
+        for name in (
+            "power",
+            "t_setpoint",
+            "h_setpoint",
+            "t_dew_point_setpoint",
+            "delta_t_dew_point_setpoint",
+            "spare_setpoint",
+            "vent_recirculation",
+            "force_heating",
+            "force_cooling",
+            "force_free_cooling",
+        ):
+            _add(getattr(vmc, name, None))
+        _walk(getattr(vmc, "season", None))
+        _walk(getattr(vmc, "compressor_management", None))
+        _walk(getattr(vmc, "cooling_management", None))
+        _walk(getattr(vmc, "requests", None))
+        _walk(getattr(vmc, "sensors", None))
+        _walk(getattr(vmc, "alarms", None))
+
+    # --- HOME WINDOWS STATE / WEATHER / SCENARIOS
+    _walk(getattr(climate, "home_windows_state", None))
+    _walk(getattr(climate, "weather", None))
+    _walk(getattr(climate, "scenarios", None))
+
+    return out
+
+
