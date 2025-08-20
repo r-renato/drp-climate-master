@@ -92,7 +92,16 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             "unit": self._runtime.climate.temperature_unit,
                         }
                     )
+                    defs.append(
+                        {
+                            "type" : "HeatIndexSensor",
+                            "name": f"Ambient {area.name}",
+                            "sensors": sensors,  # es. SensorPair o dict compatibile
+                            "unit": self._runtime.climate.temperature_unit,
+                        }
+                    )
 
+        _LOGGER.debug("build_dewpoint_sensor_defs: %d definizioni", len(defs))
         return defs
 
     async def async_setup_slave_entities(self) -> List[Any]:

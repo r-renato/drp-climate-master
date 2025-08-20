@@ -135,12 +135,10 @@ from homeassistant.helpers.update_coordinator import (
 )
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from .controller.coordinator import ClimateCoordinator
-
 from .helpers.utils import slugify, as_float
 
 from .domain.models import SensorPair
-from .helpers.psychrometric import celsius_to_fahrenheit, dew_point_celsius
+from .helpers.psychrometric import celsius_to_fahrenheit, dew_point_celsius, heat_index_celsius
 from .const import (
     COORDINATOR,
     DOMAIN,
@@ -164,7 +162,7 @@ async def async_setup_entry(
     - Li registra con async_add_entities
     """
     store = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
-    coordinator: ClimateCoordinator = store.get(COORDINATOR)
+    coordinator = store.get(COORDINATOR)
     if coordinator is None:
         _LOGGER.warning(
             "Coordinator non trovato per entry %s: nessuna entity sensor aggiunta",
@@ -175,9 +173,21 @@ async def async_setup_entry(
     entities: List[SensorEntity] = []
     try:
         for cfg in coordinator.build_slave_sensor_defs():
-            if cfg["type"] != "DewpointSensor":
+            _LOGGER.info("Provo ad aggiungere %s", cfg)
+            if cfg["type"] == "DewpointSensor":
                 entities.append(
                     DewpointSensor(
+                        hass=hass,
+                        coordinator=coordinator,
+                        entry=entry,
+                        name=cfg["name"],
+                        sensors=cfg["sensors"],
+                        temperature_unit=cfg["unit"],
+                    )
+                )
+            if cfg["type"] == "HeatIndexSensor":
+                entities.append(
+                    HeatIndexSensor(
                         hass=hass,
                         coordinator=coordinator,
                         entry=entry,
@@ -191,11 +201,10 @@ async def async_setup_entry(
 
     if entities:
         async_add_entities(entities)  # update_before_add=False di default
-        _LOGGER.debug("Aggiunte %d entità a %s.sensor", len(entities), DOMAIN)
+        _LOGGER.info("Aggiunte %d entità a %s.sensor", len(entities), DOMAIN)
     else:
-        _LOGGER.debug("Nessuna entità sensor da aggiungere per %s", entry.entry_id)
+        _LOGGER.info("Nessuna entità sensor da aggiungere per %s", entry.entry_id)
 
-        
 class BaseSensor(
     CoordinatorEntity[DataUpdateCoordinator[dict[str, Any]]],
     RestoreSensor,
@@ -211,7 +220,7 @@ class BaseSensor(
     """
 
     _attr_should_poll = False
-    _attr_has_entity_name = True
+    _attr_has_entity_name = False  # ← il nome dell’entità sarà ESATTAMENTE self._attr_name
     _attr_entity_category = EntityCategory.DIAGNOSTIC  # default: diagnostico
 
     def __init__(
@@ -221,6 +230,7 @@ class BaseSensor(
         entry: ConfigEntry,
         name: str,
         unique_key: str,
+        temperature_unit: UnitOfTemperature | str = UnitOfTemperature.CELSIUS,
     ) -> None:
         super().__init__(coordinator)
         self._hass = hass
@@ -228,6 +238,22 @@ class BaseSensor(
         self._attr_name = name
         # unique_id stabile e safe
         self._attr_unique_id = slugify(f"{entry.entry_id}_{unique_key}")
+
+        # Normalizza l'unità: accettiamo sia enum sia stringhe ("°C"/"C" o "°F"/"F")
+        if isinstance(temperature_unit, str):
+            tu = temperature_unit.strip().upper().replace("°", "")
+            if tu in ("C", "CELSIUS"):
+                temperature_unit = UnitOfTemperature.CELSIUS
+            elif tu in ("F", "FAHRENHEIT"):
+                temperature_unit = UnitOfTemperature.FAHRENHEIT
+            else:
+                _LOGGER.warning(
+                    "Unità temperatura sconosciuta %r, uso Celsius di default", temperature_unit
+                )
+                temperature_unit = UnitOfTemperature.CELSIUS
+
+        self._target_temp_unit: UnitOfTemperature = temperature_unit  # unità esposta
+        self._attr_native_unit_of_measurement = self._target_temp_unit
 
     @property
     def _entities_state(self) -> dict[str, Any]:
@@ -306,22 +332,9 @@ class DewpointSensor(BaseSensor):
             entry=entry,
             name=f"{name} {self.DWP_NAME_POSTFIX}",
             unique_key=f"{name} {self.DWP_NAME_POSTFIX} uid",
+            temperature_unit=temperature_unit,
         )
-        # Normalizza l'unità: accettiamo sia enum sia stringhe ("°C"/"C" o "°F"/"F")
-        if isinstance(temperature_unit, str):
-            tu = temperature_unit.strip().upper().replace("°", "")
-            if tu in ("C", "CELSIUS"):
-                temperature_unit = UnitOfTemperature.CELSIUS
-            elif tu in ("F", "FAHRENHEIT"):
-                temperature_unit = UnitOfTemperature.FAHRENHEIT
-            else:
-                _LOGGER.warning(
-                    "Unità temperatura sconosciuta %r, uso Celsius di default", temperature_unit
-                )
-                temperature_unit = UnitOfTemperature.CELSIUS
 
-        self._target_temp_unit: UnitOfTemperature = temperature_unit  # unità esposta
-        self._attr_native_unit_of_measurement = self._target_temp_unit
         self._sensors = sensors
 
     @property
@@ -362,3 +375,83 @@ class DewpointSensor(BaseSensor):
             return round(float(dp_val), precision)
         except Exception:
             return float(dp_val)
+
+class HeatIndexSensor(BaseSensor):
+    """
+    Sensore di **Heat Index** (Indice di calore).
+
+    Input:
+      - Temperatura aria [°C]
+      - Umidità relativa [%] (accetta anche frazione 0..1, viene normalizzata)
+
+    Algoritmo:
+      - Usa `heat_index_celsius(t_c, rh_pct)`:
+        * converte T in °F
+        * calcola HI “semplice” (Steadman/NWS) e media con T
+        * se HI>=80°F usa la regressione di Rothfusz + aggiustamenti
+        * ritorna HI in °C
+      - L’entità esporta HI in °C o °F a seconda della configurazione.
+    """
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+    _attr_entity_category = None  # è una misura "normale", non diagnostica
+
+    HNX_NAME_POSTFIX = "Heat-Index"
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        coordinator: DataUpdateCoordinator[dict[str, Any]],
+        entry: ConfigEntry,
+        name: str,
+        sensors: SensorPair,
+        temperature_unit: UnitOfTemperature | str = UnitOfTemperature.CELSIUS,
+    ) -> None:
+        super().__init__(
+            hass=hass,
+            coordinator=coordinator,
+            entry=entry,
+            name=f"{name} {self.HNX_NAME_POSTFIX}",
+            unique_key=f"{name} {self.HNX_NAME_POSTFIX} uid",
+            temperature_unit=temperature_unit,
+        )
+
+        self._sensors = sensors
+
+    @property
+    def native_value(self) -> Optional[float]:
+        """
+        Ritorna l’Heat Index nella stessa unità dell’entità (°C o °F).
+        """
+        # 1) leggi valori sorgente
+        raw_t = self._entities_state.get(self._sensors.temperature)
+        raw_rh = self._entities_state.get(self._sensors.humidity)
+
+        t_c = as_float(raw_t)
+        rh = as_float(raw_rh)
+        if t_c is None or rh is None:
+            return None
+
+        # 2) normalizza RH (accetta 0..1 o 0..100) + clamping
+        if 0.0 <= rh <= 1.0:
+            rh *= 100.0
+        rh = max(0.0, min(100.0, rh))
+
+        # 3) calcola HI in °C usando il tuo helper
+        try:
+            hi_c = float(heat_index_celsius(t_c, rh))
+        except Exception as ex:  # noqa: BLE001
+            _LOGGER.debug("Impossibile calcolare Heat Index per T=%s°C RH=%s%%: %s", t_c, rh, ex)
+            return None
+
+        # 4) conversione unità finale
+        hi_val = celsius_to_fahrenheit(hi_c) if self._target_temp_unit == UnitOfTemperature.FAHRENHEIT else hi_c
+
+        # 5) applica precisione suggerita
+        precision = self._attr_suggested_display_precision or 1
+        try:
+            return round(float(hi_val), precision)
+        except Exception:
+            return float(hi_val)
+

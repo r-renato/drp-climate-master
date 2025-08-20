@@ -26,34 +26,50 @@ from .controller.supervisor import ClimateSupervisor
 
 _LOGGER = logging.getLogger(__name__)
 
+from homeassistant.config_entries import SOURCE_IMPORT
+
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Entry point quando Home Assistant legge configuration.yaml.
 
     - Prepara hass.data[DOMAIN]
-    - Se trova la sezione YAML del dominio, innesca il flow di IMPORT,
-      che convertirà la YAML in un ConfigEntry (gestito poi da async_setup_entry).
+    - Se trova la sezione YAML del dominio, innesca il flow di IMPORT
+      SENZA attenderlo (no await), così non blocchiamo il setup.
     """
-    hass.data.setdefault(DOMAIN, {
-        "yaml" : []
-    })
+    # Inizializza lo store del dominio
+    store = hass.data.setdefault(DOMAIN, {})
 
+    # Recupera la sezione YAML del dominio (se assente, nulla da fare)
     domain_cfg = config.get(DOMAIN)
     if not domain_cfg:
-        _LOGGER.debug("%s: nessuna configurazione YAML trovata (ok).", DOMAIN)
         return True
 
-    # Conserva la YAML grezza (può tornare utile per debug/diagnostica)
-    hass.data[DOMAIN]["yaml"] = domain_cfg
-    # _LOGGER.debug("async_setup (config) %s", domain_cfg)
+    # Se esiste già almeno una ConfigEntry, non rilanciare import
+    if hass.config_entries.async_entries(DOMAIN):
+        _LOGGER.info("%s: entry già presente; salto import YAML", DOMAIN)
+        return True
+
+    # Evita di lanciare più volte l'import nello stesso avvio
+    if store.get("_import_started"):
+        _LOGGER.debug("%s: import YAML già avviato; skip", DOMAIN)
+        return True
+    store["_import_started"] = True
+
+    # (opzionale) conserva la YAML grezza per diagnostica
+    store["yaml"] = domain_cfg
+
     _LOGGER.info("%s: configurazione YAML rilevata, avvio import flow…", DOMAIN)
-    # Avvia l’import: passerà dentro config_flow.async_step_import(...)
-    # Passiamo l’intero 'config' così il flow può leggere la chiave DOMAIN.
-    await hass.config_entries.flow.async_init(
-        DOMAIN,
-        context={"source": SOURCE_IMPORT},
-        data=config,
+
+    # Avvia l’import in background (NON await!)
+    # Passiamo SOLO la sezione del dominio, incapsulata sotto DOMAIN
+    hass.async_create_task(
+        hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": SOURCE_IMPORT},
+            data={DOMAIN: domain_cfg},
+        )
     )
-    _LOGGER.info("%s: configurazione YAML importata.", DOMAIN)    
+
+    # Non attendere il flow: lascia completare il setup del dominio
     return True
 
 

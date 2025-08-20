@@ -44,12 +44,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     coordinator: ClimateCoordinator = store[COORDINATOR]
     supervisor: ClimateSupervisor = store[SUPERVISOR]
 
-    slave_entities = await coordinator.async_setup_slave_entities()
-    if slave_entities:
-        await async_platform_add_entities(hass, DOMAIN, Platform.SENSOR, slave_entities)
-        _LOGGER.info("Registered %d slave sensor(s)", len(slave_entities))
-    else:
-        _LOGGER.info("No indoor areas found; no slave sensors registered")
+    # slave_entities = await coordinator.async_setup_slave_entities()
+    # if slave_entities:
+    #     await async_platform_add_entities(hass, DOMAIN, Platform.SENSOR, slave_entities)
+    #     _LOGGER.info("Registered %d slave sensor(s)", len(slave_entities))
+    # else:
+    #     _LOGGER.info("No indoor areas found; no slave sensors registered")
     
     async_add_entities([ClimateMasterEntity(coordinator, supervisor, entry)], update_before_add=True)
     _LOGGER.info("%s: setup entry '%s' completato.", DOMAIN, entry.entry_id)

@@ -277,16 +277,21 @@ class DrpClimateMasterConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(step_id="user", data_schema=data_schema)
 
     async def async_step_import(self, import_config: Dict[str, Any]) -> ConfigFlowResult:
-        """Import da YAML: converte la YAML in uno (o più) ConfigEntry."""
+        """Import da YAML: converte la YAML in uno (o più) ConfigEntry, evitando duplicati."""
         hubs = import_config.get(DOMAIN)
         if not hubs:
             return self.async_abort(reason="invalid_yaml")
 
-        # Importiamo il PRIMO climate valido trovato (pattern comune nei componenti HA)
+        # Lista delle entry già presenti per questo dominio
+        existing_entries = self._async_current_entries()
+        existing_uids = {e.data.get(CONF_CLIMATE_UNIQUE_ID) for e in existing_entries if e.data}
+
+        # Importiamo il PRIMO climate valido trovato (comportamento standard HA)
         for hub in hubs:
             hub_norm = _normalize_yaml_hub(hub)
             hub_name = hub_norm.get(CONF_NAME, "Unnamed Hub")
             climates = hub_norm.get("climate") or []
+
             for climate in climates:
                 try:
                     data, options = _yaml_climate_to_entry_payload(hub_name, climate)
@@ -295,14 +300,23 @@ class DrpClimateMasterConfigFlow(ConfigFlow, domain=DOMAIN):
                     return self.async_abort(reason="invalid_yaml")
 
                 unique_id = data.get(CONF_CLIMATE_UNIQUE_ID)
+
+                # 🔒 Guard esplicito: se esiste già una entry con lo stesso UID, non creare duplicati
+                if unique_id and unique_id in existing_uids:
+                    _LOGGER.info(
+                        "%s: import YAML saltato: unique_id '%s' è già configurato",
+                        DOMAIN, unique_id
+                    )
+                    return self.async_abort(reason="already_configured")
+
+                # Imposta l'UID dell'entry ed abort se già configurata (con eventuale update del titolo)
                 if unique_id:
                     await self.async_set_unique_id(unique_id)
-                    # Se già configurato, aggiorna titolo ed esci
                     self._abort_if_unique_id_configured(
                         updates={"title": f"{INTEGRATION_NAME} - {data.get(CONF_CLIMATE_NAME)}"}
                     )
 
-                # Evita duplicazioni naive basate su nome/uid
+                # Ulteriore protezione: match su (name, uid)
                 self._async_abort_entries_match(
                     {
                         CONF_CLIMATE_UNIQUE_ID: unique_id,
@@ -316,6 +330,7 @@ class DrpClimateMasterConfigFlow(ConfigFlow, domain=DOMAIN):
                     options=options,
                 )
 
+        # Nessun climate valido trovato nell'input
         return self.async_abort(reason="nothing_to_import")
 
     @staticmethod
