@@ -9,10 +9,10 @@ from typing import Optional, Dict, List
 
 class HVACOperatingProfile(Enum):
     """Preset/Profilo operativo esposto nel Climate."""
-    COMFORT = "comfort"
-    ECO = "eco"
+    COMFORT = "Comfort"
+    ECO = "Eco"
     # AWAY = "away"
-    VACATION = "vacation"
+    VACATION = "Vacation"
     
     @classmethod
     def values(cls) -> list[str]:

@@ -1,123 +1,11 @@
-# #
-# from __future__ import annotations
-
-# import logging
-# from dataclasses import dataclass
-# from typing import Any
-
-# from homeassistant.components.sensor import SensorEntity, RestoreSensor, SensorDeviceClass, SensorStateClass
-# from homeassistant.config_entries import ConfigEntry
-# from homeassistant.core import HomeAssistant, callback
-# from homeassistant.const import PERCENTAGE, UnitOfTemperature
-# from homeassistant.helpers.entity_platform import AddEntitiesCallback
-# from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, CoordinatorEntity
-# from homeassistant.helpers.device_registry import DeviceInfo
-# from homeassistant.const import EntityCategory
-# from homeassistant.util import slugify
-
-# from .domain.models import SensorPair
-# from .helpers.psychrometric import dew_point_celsius
-
-# from .const import (
-#     DOMAIN,
-#     ENTITIES_STATE,
-#     INTEGRATION_MANUFACTURER,
-#     INTEGRATION_NAME,
-#     INTEGRATION_VERSION,
-# )  # definiscile nel tuo const.py
-
-# _LOGGER = logging.getLogger(__name__)
-
-# class BaseSensor(CoordinatorEntity[DataUpdateCoordinator[dict[str, Any]]], RestoreSensor, SensorEntity):
-#     _attr_should_poll = False
-#     _attr_has_entity_name = True
-#     _attr_entity_category = EntityCategory.DIAGNOSTIC
-
-#     def __init__(
-#             self,
-#             hass: HomeAssistant, 
-#             coordinator: DataUpdateCoordinator[dict[str, Any]],
-#             entry: ConfigEntry,
-#             name: str,
-#             unique_key: str
-#     ) -> None:
-#         super().__init__(coordinator)
-#         self._hass = hass
-#         self._entry = entry
-#         self._attr_name = name
-#         self._attr_unique_id = slugify(f"{entry.entry_id}_{unique_key}")
-
-#     @property
-#     def _entities_state(self) -> dict:
-#         """
-#         Restituisce il dizionario delle entità Home Assistant attive.
-
-#         Returns:
-#             dict: Mappa degli stati delle entità registrate in Home Assistant.
-#         """
-#         return self._hass.data[DOMAIN][self._entry.entry_id][ENTITIES_STATE]
-    
-#     @property
-#     def device_info(self) -> DeviceInfo:
-#         return DeviceInfo(
-#             identifiers={(DOMAIN, self._entry.entry_id)},
-#             name=INTEGRATION_NAME,
-#             manufacturer=INTEGRATION_MANUFACTURER,
-#             sw_version=INTEGRATION_VERSION,
-#         )
-
-#     @property
-#     def available(self) -> bool:
-#         return self.coordinator.last_update_success
-
-# class DewpointSensor(BaseSensor):
-#     """..."""
-#     DWP_NAME_POSTFIX = "Dew-Point"
-
-#     def __init__(
-#             self,
-#             hass: HomeAssistant, 
-#             coordinator: DataUpdateCoordinator[dict[str, Any]],
-#             entry: ConfigEntry,
-#             name: str,
-#             sensors: SensorPair,
-#             temperature_unit: str,
-#     ) -> None:
-#         super().__init__(
-#             hass,
-#             coordinator,
-#             entry,
-#             f"{name} {self.DWP_NAME_POSTFIX}",
-#             f"{name} {self.DWP_NAME_POSTFIX} uid"
-#         )
-#         self._attr_native_unit_of_measurement = temperature_unit
-#         self._attr_device_class = SensorDeviceClass.TEMPERATURE
-#         self._attr_state_class = SensorStateClass.MEASUREMENT
-#         self._attr_suggested_display_precision = 1
-
-#         self._sensors = sensors
-
-#     @property
-#     def native_value(self):
-#         """Restituisce il valore del sensore di punto di rugiada."""
-#         dew_point = None
-
-#         temperature = self._entities_state.get(self._sensors.temperature, None)
-#         humidity = self._entities_state.get(self._sensors.humidity, None)
-
-#         if temperature and humidity:
-#             dew_point = dew_point_celsius( temperature, humidity )
-
-#         return dew_point
-
-
-
-
 # sensor.py
 from __future__ import annotations
 
 import logging
 from typing import Any, Optional, List
+from abc import ABC, abstractmethod
+
+from statistics import fmean
 
 from homeassistant.components.sensor import (
     SensorEntity,
@@ -126,16 +14,21 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
-from homeassistant.const import UnitOfTemperature, EntityCategory
+from homeassistant.core import HomeAssistant, callback, State
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     CoordinatorEntity,
 )
-from homeassistant.helpers.device_registry import DeviceInfo
 
-from .helpers.utils import slugify, as_float
+from homeassistant.const import (
+    EntityCategory,
+    PERCENTAGE,
+    UnitOfTemperature,
+)
+from .helpers.utils import computed_float_or_none, slugify, as_float
 
 from .domain.models import SensorPair
 from .helpers.psychrometric import celsius_to_fahrenheit, dew_point_celsius, heat_index_celsius
@@ -163,6 +56,7 @@ async def async_setup_entry(
     """
     store = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
     coordinator = store.get(COORDINATOR)
+    unique_id = store.setdefault("unique_id", {})
     if coordinator is None:
         _LOGGER.warning(
             "Coordinator non trovato per entry %s: nessuna entity sensor aggiunta",
@@ -175,27 +69,79 @@ async def async_setup_entry(
         for cfg in coordinator.build_slave_sensor_defs():
             _LOGGER.info("Provo ad aggiungere %s", cfg)
             if cfg["type"] == "DewpointSensor":
-                entities.append(
-                    DewpointSensor(
-                        hass=hass,
-                        coordinator=coordinator,
-                        entry=entry,
-                        name=cfg["name"],
-                        sensors=cfg["sensors"],
-                        temperature_unit=cfg["unit"],
-                    )
+                sensor = DewpointSensor(
+                    hass=hass,
+                    coordinator=coordinator,
+                    entry=entry,
+                    name=cfg["name"],
+                    sensors=cfg["sensors"],
+                    temperature_unit=cfg["unit"],
                 )
+                unique_id[sensor.unique_id] = None
+                entities.append(sensor)
+
             if cfg["type"] == "HeatIndexSensor":
-                entities.append(
-                    HeatIndexSensor(
-                        hass=hass,
-                        coordinator=coordinator,
-                        entry=entry,
-                        name=cfg["name"],
-                        sensors=cfg["sensors"],
-                        temperature_unit=cfg["unit"],
-                    )
+                sensor = HeatIndexSensor(
+                    hass=hass,
+                    coordinator=coordinator,
+                    entry=entry,
+                    name=cfg["name"],
+                    sensors=cfg["sensors"],
+                    temperature_unit=cfg["unit"],
                 )
+                unique_id[sensor.unique_id] = None
+                entities.append(sensor)
+
+            if cfg["type"] == "CurrentTemperatureSensor":
+                sensor = CurrentTemperatureSensor(
+                    hass=hass,
+                    coordinator=coordinator,
+                    entry=entry,
+                    name=cfg["name"],
+                    temp_sensors=cfg["temp_sensors"],
+                    temperature_unit=cfg["unit"],
+                )
+                unique_id[sensor.unique_id] = None
+                entities.append(sensor)
+
+            if cfg["type"] == "CurrentHumiditySensor":
+                sensor = CurrentHumiditySensor(
+                    hass=hass,
+                    coordinator=coordinator,
+                    entry=entry,
+                    name=cfg["name"],
+                    humi_sensors=cfg["humi_sensors"],
+                    humidity_unit=cfg["unit"],
+                )
+                unique_id[sensor.unique_id] = None
+                entities.append(sensor)
+
+            if cfg["type"] == "CurrentDewpointSensor":
+                sensor = CurrentDewpointSensor(
+                    hass=hass,
+                    coordinator=coordinator,
+                    entry=entry,
+                    name=cfg["name"],
+                    temp_sensors=cfg["temp_sensors"],
+                    humi_sensors=cfg["humi_sensors"],
+                    temperature_unit=cfg["unit"],
+                )
+                unique_id[sensor.unique_id] = None
+                entities.append(sensor)
+
+            if cfg["type"] == "CurrentHeatIndexSensor":
+                sensor = CurrentHeatIndexSensor(
+                    hass=hass,
+                    coordinator=coordinator,
+                    entry=entry,
+                    name=cfg["name"],
+                    temp_sensors=cfg["temp_sensors"],
+                    humi_sensors=cfg["humi_sensors"],
+                    temperature_unit=cfg["unit"],
+                )
+                unique_id[sensor.unique_id] = None
+                entities.append(sensor)
+
     except Exception as ex:  # noqa: BLE001
         _LOGGER.exception("Errore durante creazione sensori dew-point: %s", ex)
 
@@ -209,6 +155,7 @@ class BaseSensor(
     CoordinatorEntity[DataUpdateCoordinator[dict[str, Any]]],
     RestoreSensor,
     SensorEntity,
+    ABC,
 ):
     """
     Base class per sensori guidati da DataUpdateCoordinator.
@@ -222,7 +169,7 @@ class BaseSensor(
     _attr_should_poll = False
     _attr_has_entity_name = False  # ← il nome dell’entità sarà ESATTAMENTE self._attr_name
     _attr_entity_category = EntityCategory.DIAGNOSTIC  # default: diagnostico
-
+    
     def __init__(
         self,
         hass: HomeAssistant,
@@ -230,30 +177,48 @@ class BaseSensor(
         entry: ConfigEntry,
         name: str,
         unique_key: str,
-        temperature_unit: UnitOfTemperature | str = UnitOfTemperature.CELSIUS,
+        sensor_unit: UnitOfTemperature | str = UnitOfTemperature.CELSIUS,
     ) -> None:
         super().__init__(coordinator)
         self._hass = hass
         self._entry = entry
         self._attr_name = name
         # unique_id stabile e safe
-        self._attr_unique_id = slugify(f"{entry.entry_id}_{unique_key}")
+        self._attr_unique_id: str = slugify(f"{entry.entry_id}_{unique_key}")
 
-        # Normalizza l'unità: accettiamo sia enum sia stringhe ("°C"/"C" o "°F"/"F")
-        if isinstance(temperature_unit, str):
-            tu = temperature_unit.strip().upper().replace("°", "")
+        # Normalizzazione *generica* dell’unità:
+        self._target_temp_unit: UnitOfTemperature | None = None
+
+        if isinstance(sensor_unit, UnitOfTemperature):
+            # Unità di temperatura espresse come enum
+            self._target_temp_unit = sensor_unit
+            self._attr_native_unit_of_measurement = sensor_unit
+        elif isinstance(sensor_unit, str):
+            tu = sensor_unit.strip().upper().replace("°", "")
             if tu in ("C", "CELSIUS"):
-                temperature_unit = UnitOfTemperature.CELSIUS
+                self._target_temp_unit = UnitOfTemperature.CELSIUS
+                self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
             elif tu in ("F", "FAHRENHEIT"):
-                temperature_unit = UnitOfTemperature.FAHRENHEIT
+                self._target_temp_unit = UnitOfTemperature.FAHRENHEIT
+                self._attr_native_unit_of_measurement = UnitOfTemperature.FAHRENHEIT
             else:
-                _LOGGER.warning(
-                    "Unità temperatura sconosciuta %r, uso Celsius di default", temperature_unit
-                )
-                temperature_unit = UnitOfTemperature.CELSIUS
+                # Esempio: "%", "ppm", ecc. → lascia invariato
+                self._attr_native_unit_of_measurement = sensor_unit
+                self._target_temp_unit = None
+        else:
+            # Fallback sicuro
+            self._target_temp_unit = UnitOfTemperature.CELSIUS
+            self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
 
-        self._target_temp_unit: UnitOfTemperature = temperature_unit  # unità esposta
-        self._attr_native_unit_of_measurement = self._target_temp_unit
+        # Rolling window dimensionata sull’update_interval del coordinator
+        interval_s = 60
+        try:
+            if getattr(coordinator, "update_interval", None):
+                interval_s = max(1, int(coordinator.update_interval.total_seconds()))  # type: ignore
+        except Exception:
+            pass
+        self._window_size = max(1, min(3 * 3600 // interval_s, 1000))
+        self._data_series: list[float] = []
 
     @property
     def _entities_state(self) -> dict[str, Any]:
@@ -265,6 +230,14 @@ class BaseSensor(
             dict[str, Any]: mappa entity_id -> valore (numero/str/State).
         """
         return self._hass.data[DOMAIN][self._entry.entry_id][ENTITIES_STATE]
+
+    @property
+    def native_value(self) -> Optional[float]:
+        return computed_float_or_none(self._attr_native_value, precision=self._attr_suggested_display_precision)
+    
+    @property
+    def unique_id(self) -> str:
+        return self._attr_unique_id
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -289,6 +262,23 @@ class BaseSensor(
         l'effetto "Unknown" al riavvio.
         """
         await super().async_added_to_hass()
+
+        # Assicurati che l'entity_id esista
+        if not self.entity_id:
+            return
+        
+        # (opzionale) prendi anche il unique_id dal registry
+        reg = er.async_get(self.hass)
+        entry = reg.async_get(self.entity_id)
+
+        uid = (entry.unique_id if entry else None) or self.unique_id
+        store = self.hass.data.setdefault(DOMAIN, {}).setdefault("uid_map", {})
+        store[uid] = self.entity_id
+                
+        # 
+        # Qui ripristiniamo lo stato precedente (se presente) per ridurre
+        # l'effetto "Unknown" al riavvio.
+        #        
         last_state = await self.async_get_last_state()
         if last_state and self._attr_native_value is None:
             try:
@@ -298,6 +288,41 @@ class BaseSensor(
             except Exception as ex:  # noqa: BLE001
                 _LOGGER.debug("Restore skipped for %s: %s", self.entity_id, ex)
 
+    # --- QUI il metodo astratto che i figli DEVONO implementare ---
+    @abstractmethod
+    def _slave_update(self) -> bool:
+        """..."""
+
+    def _commit_native_value(self) -> None:
+        """
+        Pubblica _attr_native_value e copia lo State corrente nello store condiviso.
+        Da chiamare subito dopo aver impostato _attr_native_value.
+        """
+        # 1) Pubblica lo stato dell'entità (sync call, no await)
+        self.async_write_ha_state()
+
+        # 2) Copia lo State nello store condiviso
+        if not self.entity_id:
+            return
+        st: State | None = self.hass.states.get(self.entity_id)
+        if st is None:
+            return
+
+        domain_store = self.hass.data.setdefault(DOMAIN, {})
+        entry_store = domain_store.setdefault(self._entry.entry_id, {})
+        entities_state: dict[str, Any] = entry_store.setdefault(ENTITIES_STATE, {})
+        entities_state[self.entity_id] = st
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Invocato ad ogni update del coordinator."""
+        try:
+            if self._slave_update():  # calcola/aggiorna _attr_native_value ecc.
+                self._commit_native_value()  # pubblica lo stato aggiornato
+        finally:
+            # importantissimo: notifica HA che lo stato è cambiato
+            super()._handle_coordinator_update()
+        
 class DewpointSensor(BaseSensor):
     """
     Sensore di Punto di Rugiada (Dew Point).
@@ -332,13 +357,12 @@ class DewpointSensor(BaseSensor):
             entry=entry,
             name=f"{name} {self.DWP_NAME_POSTFIX}",
             unique_key=f"{name} {self.DWP_NAME_POSTFIX} uid",
-            temperature_unit=temperature_unit,
+            sensor_unit=temperature_unit,
         )
 
         self._sensors = sensors
 
-    @property
-    def native_value(self) -> Optional[float]:
+    def _slave_update(self) -> bool:
         """
         Valore nativo del sensore (dew point).
 
@@ -354,14 +378,16 @@ class DewpointSensor(BaseSensor):
         rh = as_float(raw_rh)
 
         if t_c is None or rh is None:
-            return None
+            self._attr_available = False
+            return True
 
         # dew_point_celsius richiede T in °C e RH in percento
         try:
             dp_c = dew_point_celsius(t_c, rh)
         except Exception as ex:  # noqa: BLE001
             _LOGGER.debug("Impossibile calcolare il dew point: %s", ex)
-            return None
+            self._attr_available = False
+            return True
 
         # Conversione nell'unità richiesta dall'entità
         if self._target_temp_unit == UnitOfTemperature.FAHRENHEIT:
@@ -369,12 +395,18 @@ class DewpointSensor(BaseSensor):
         else:
             dp_val = dp_c
 
-        # Applica precisione suggerita senza cambiare il tipo (float)
-        precision = self._attr_suggested_display_precision or 1
-        try:
-            return round(float(dp_val), precision)
-        except Exception:
-            return float(dp_val)
+        # Aggiorna la rolling window (lista) e calcola media con stdlib
+        self._data_series.append(dp_val)
+        if len(self._data_series) > self._window_size:
+            self._data_series = self._data_series[-self._window_size:]
+
+        avg = fmean(self._data_series) if self._data_series else dp_val
+
+        attr_native_old_value = self._attr_native_value
+        self._attr_native_value = avg
+        self._attr_available = True
+
+        return attr_native_old_value != self._attr_native_value
 
 class HeatIndexSensor(BaseSensor):
     """
@@ -414,13 +446,12 @@ class HeatIndexSensor(BaseSensor):
             entry=entry,
             name=f"{name} {self.HNX_NAME_POSTFIX}",
             unique_key=f"{name} {self.HNX_NAME_POSTFIX} uid",
-            temperature_unit=temperature_unit,
+            sensor_unit=temperature_unit,
         )
 
         self._sensors = sensors
-
-    @property
-    def native_value(self) -> Optional[float]:
+    
+    def _slave_update(self) -> bool:
         """
         Ritorna l’Heat Index nella stessa unità dell’entità (°C o °F).
         """
@@ -431,7 +462,8 @@ class HeatIndexSensor(BaseSensor):
         t_c = as_float(raw_t)
         rh = as_float(raw_rh)
         if t_c is None or rh is None:
-            return None
+            self._attr_available = False
+            return True
 
         # 2) normalizza RH (accetta 0..1 o 0..100) + clamping
         if 0.0 <= rh <= 1.0:
@@ -443,15 +475,387 @@ class HeatIndexSensor(BaseSensor):
             hi_c = float(heat_index_celsius(t_c, rh))
         except Exception as ex:  # noqa: BLE001
             _LOGGER.debug("Impossibile calcolare Heat Index per T=%s°C RH=%s%%: %s", t_c, rh, ex)
-            return None
+            self._attr_available = False
+            return True
 
         # 4) conversione unità finale
         hi_val = celsius_to_fahrenheit(hi_c) if self._target_temp_unit == UnitOfTemperature.FAHRENHEIT else hi_c
 
-        # 5) applica precisione suggerita
-        precision = self._attr_suggested_display_precision or 1
+        # Aggiorna la rolling window (lista) e calcola media con stdlib
+        self._data_series.append(hi_val)
+        if len(self._data_series) > self._window_size:
+            self._data_series = self._data_series[-self._window_size:]
+
+        avg = fmean(self._data_series) if self._data_series else hi_val
+        attr_native_old_value = self._attr_native_value
+        self._attr_native_value = avg
+        self._attr_available = True
+
+        return attr_native_old_value != self._attr_native_value
+
+class CurrentTemperatureSensor(BaseSensor):
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+    _attr_entity_category = None  # è una misura "normale", non diagnostica
+
+    T_NAME_POSTFIX = "Temperature"
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        coordinator: DataUpdateCoordinator[dict[str, Any]],
+        entry: ConfigEntry,
+        name: str,
+        temp_sensors: List[str],
+        temperature_unit: UnitOfTemperature | str = UnitOfTemperature.CELSIUS,
+    ) -> None:
+        super().__init__(
+            hass=hass,
+            coordinator=coordinator,
+            entry=entry,
+            name=f"{name} {self.T_NAME_POSTFIX}",
+            unique_key=f"{name} {self.T_NAME_POSTFIX} uid",
+            sensor_unit=temperature_unit,
+        )
+
+        self._temp_sensors = temp_sensors
+
+    def _slave_update(self) -> bool:
+        """
+        Ritorna la temperatura corrente media da tutti i sensori di temperatura
+        configurati, in °C o °F a seconda dell'unità dell'entità.
+        """
+        if not self._temp_sensors:
+            _LOGGER.warning("Nessun sensore di temperatura configurato per %s", self.entity_id)
+            self._attr_available = False
+            return True
+
+        # Leggi i valori dai sensori configurati
+        temps = [as_float(self._entities_state.get(s)) for s in self._temp_sensors]
+        valid_temps = [t for t in temps if t is not None]
+
+        if len(temps) != len(valid_temps):
+            _LOGGER.warning(
+                "Alcuni sensori di temperatura non disponibili per %s: %d/%d validi",
+                self.entity_id,
+                len(valid_temps),
+                len(temps),
+            )
+            self._attr_available = False
+            return True
+
+        avg_c = fmean(valid_temps)
+
+        # Conversione nell'unità richiesta dall'entità
+        if self._target_temp_unit == UnitOfTemperature.FAHRENHEIT:
+            avg = celsius_to_fahrenheit(avg_c)
+        else:
+            avg = avg_c
+
+        # Aggiorna la rolling window (lista) e calcola media con stdlib
+        self._data_series.append(avg)
+        if len(self._data_series) > self._window_size:
+            self._data_series = self._data_series[-self._window_size:]
+
+        attr_native_old_value = self._attr_native_value
+        self._attr_native_value = fmean(self._data_series) if self._data_series else avg
+        self._attr_available = True
+
+        return attr_native_old_value != self._attr_native_value
+
+class CurrentHumiditySensor(BaseSensor):
+    _attr_device_class = SensorDeviceClass.HUMIDITY
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+    _attr_entity_category = None  # è una misura "normale", non diagnostica
+
+    H_NAME_POSTFIX = "Humidity"
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        coordinator: DataUpdateCoordinator[dict[str, Any]],
+        entry: ConfigEntry,
+        name: str,
+        humi_sensors: List[str],
+        humidity_unit: UnitOfTemperature | str = PERCENTAGE
+    ) -> None:
+        super().__init__(
+            hass=hass,
+            coordinator=coordinator,
+            entry=entry,
+            name=f"{name} {self.H_NAME_POSTFIX}",
+            unique_key=f"{name} {self.H_NAME_POSTFIX} uid",
+            sensor_unit=humidity_unit,
+        )
+
+        self._humi_sensors = humi_sensors
+
+    def _slave_update(self) -> bool:
+        """Ricalcola l'umidità media (con clamp 0..100) e applica smoothing nella finestra."""
+        if not self._humi_sensors:
+            _LOGGER.debug("Nessun sensore di umidità configurato per %s", self.entity_id)
+            self._attr_available = False
+            self._attr_native_value = None
+            return True
+
+        # Leggi i valori dai sensori configurati
+        humis = [as_float(self._entities_state.get(s)) for s in self._humi_sensors]
+        valid_humis = [t for t in humis if t is not None]
+
+        if len(humis) != len(valid_humis):
+            _LOGGER.warning(
+                "Alcuni sensori di umidità non disponibili per %s: %d/%d validi",
+                self.entity_id,
+                len(valid_humis),
+                len(humis),
+            )
+            self._attr_available = False
+            return True
+
+        vals: list[float] = []
+        for eid in self._humi_sensors:
+            v = as_float(self._entities_state.get(eid))
+            if v is not None:
+                # clamp 0..100
+                vals.append(max(0.0, min(100.0, v)))
+
+        if not vals:
+            _LOGGER.debug("Nessun valore valido dai sensori di umidità per %s", self.entity_id)
+            self._attr_available = False
+            self._attr_native_value = None
+            return True
+
+        avg = fmean(vals)
+
+        # Smoothing con finestra mobile
+        self._data_series.append(avg)
+        if len(self._data_series) > self._window_size:
+            self._data_series = self._data_series[-self._window_size:]
+
+        out = fmean(self._data_series) if self._data_series else avg
+        attr_native_old_value = self._attr_native_value
+        self._attr_native_value = out
+        self._attr_available = True
+
+        return attr_native_old_value != self._attr_native_value
+
+class CurrentDewpointSensor(BaseSensor):
+    """
+    Punto di rugiada medio corrente calcolato da più sensori di T e UR.
+
+    - Legge una lista di sensori di temperatura (°C) e umidità (% o frazione 0..1)
+    - Normalizza l'umidità (0..1 -> 0..100), applica clamp 0..100
+    - Calcola il dew point in °C, quindi converte nell'unità dell'entità (°C/°F)
+    - Applica una media mobile su una finestra calcolata dal BaseSensor
+    """
+
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+    _attr_entity_category = None  # misura “normale”, non diagnostica
+
+    DWP_NAME_POSTFIX = "Dew-Point"
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        coordinator: DataUpdateCoordinator[dict[str, Any]],
+        entry: ConfigEntry,
+        name: str,
+        temp_sensors: List[str],
+        humi_sensors: List[str],
+        temperature_unit: UnitOfTemperature | str = UnitOfTemperature.CELSIUS,
+    ) -> None:
+        super().__init__(
+            hass=hass,
+            coordinator=coordinator,
+            entry=entry,
+            name=f"{name} {self.DWP_NAME_POSTFIX}",
+            unique_key=f"{name} {self.DWP_NAME_POSTFIX} uid",
+            sensor_unit=temperature_unit,
+        )
+        self._temp_sensors = temp_sensors or []
+        self._humi_sensors = humi_sensors or []
+
+    def _slave_update(self) -> bool:
+        """
+        Calcola e aggiorna `_attr_native_value` e `_attr_available`.
+        Esegue smoothing su finestra mobile definita in BaseSensor.
+        """
+        # 1) Validazione base liste
+        if not self._temp_sensors or not self._humi_sensors:
+            _LOGGER.debug( "%s: liste sensori incomplete (temp=%d, humi=%d)",
+                self.entity_id, len(self._temp_sensors), len(self._humi_sensors),
+            )
+            self._attr_available = False
+            self._attr_native_value = None
+            return True
+
+        # 2) Lettura valori
+        temps = [as_float(self._entities_state.get(eid)) for eid in self._temp_sensors]
+        humis = [as_float(self._entities_state.get(eid)) for eid in self._humi_sensors]
+
+        valid_temps = [t for t in temps if t is not None]
+        valid_humis = [h for h in humis if h is not None]
+
+        if len(temps) != len(valid_temps) or len(humis) != len(valid_humis):
+            _LOGGER.debug("%s: nessun dato valido (T:%d/%d, RH:%d/%d)",
+                self.entity_id, len(valid_temps), len(temps), len(valid_humis), len(humis)
+            )
+            self._attr_available = False
+            self._attr_native_value = None
+            return True
+
+        # 3) Medie sorgente (in °C e %)
+        avg_temp_c = fmean(valid_temps)
+
+        # Normalizza umidità: accetta 0..1 come frazione → %
+        norm_humis: list[float] = []
+        for h in valid_humis:
+            if 0.0 <= h <= 1.0:
+                h *= 100.0
+            # clamp 0..100
+            norm_humis.append(max(0.0, min(100.0, h)))
+        avg_humi_pct = fmean(norm_humis)
+
+        # 4) Calcolo dew point (in °C)
         try:
-            return round(float(hi_val), precision)
-        except Exception:
-            return float(hi_val)
+            dp_c = dew_point_celsius(avg_temp_c, avg_humi_pct)
+        except Exception as ex:  # noqa: BLE001
+            _LOGGER.debug(
+                "%s: errore calc dewpoint T=%.2f°C RH=%.2f%% → %s",
+                self.entity_id, avg_temp_c, avg_humi_pct, ex
+            )
+            self._attr_available = False
+            self._attr_native_value = None
+            return True
+
+        # 5) Conversione nell'unità richiesta
+        out_val = (
+            celsius_to_fahrenheit(dp_c)
+            if self._target_temp_unit == UnitOfTemperature.FAHRENHEIT
+            else dp_c
+        )
+
+        self._data_series.append(out_val)
+        if len(self._data_series) > self._window_size:
+            self._data_series = self._data_series[-self._window_size:]
+
+        smoothed = fmean(self._data_series) if self._data_series else out_val
+        attr_native_old_value = self._attr_native_value
+        self._attr_native_value = smoothed
+        self._attr_available = True
+
+        return attr_native_old_value != self._attr_native_value
+
+class CurrentHeatIndexSensor(BaseSensor):
+    """
+    Heat Index medio corrente calcolato da più sensori di T e UR.
+
+    - Legge una lista di sensori di temperatura (°C) e umidità (% o frazione 0..1)
+    - Normalizza l'umidità (0..1 -> 0..100), clamp 0..100
+    - Calcola l'Heat Index in °C (algoritmo NWS/Rothfusz) e converte in °F se richiesto
+    - Applica una media mobile su una finestra calcolata nel BaseSensor
+    """
+
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+    _attr_entity_category = None  # misura “normale”, non diagnostica
+
+    HNX_NAME_POSTFIX = "Heat-Index"
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        coordinator: DataUpdateCoordinator[dict[str, Any]],
+        entry: ConfigEntry,
+        name: str,
+        temp_sensors: List[str],
+        humi_sensors: List[str],
+        temperature_unit: UnitOfTemperature | str = UnitOfTemperature.CELSIUS,
+    ) -> None:
+        super().__init__(
+            hass=hass,
+            coordinator=coordinator,
+            entry=entry,
+            name=f"{name} {self.HNX_NAME_POSTFIX}",
+            unique_key=f"{name} {self.HNX_NAME_POSTFIX} uid",
+            sensor_unit=temperature_unit,
+        )
+        self._temp_sensors = temp_sensors or []
+        self._humi_sensors = humi_sensors or []
+
+    def _slave_update(self) -> bool:
+        """
+        Calcola e aggiorna `_attr_native_value` e `_attr_available`.
+        Esegue smoothing su finestra mobile definita in BaseSensor.
+        """
+        # 1) Validazione liste
+        if not self._temp_sensors or not self._humi_sensors:
+            _LOGGER.debug(
+                "%s: liste sensori incomplete (temp=%d, humi=%d)",
+                self.entity_id, len(self._temp_sensors), len(self._humi_sensors),
+            )
+            self._attr_available = False
+            self._attr_native_value = None
+            return True
+
+        # 2) Lettura valori
+        temps = [as_float(self._entities_state.get(eid)) for eid in self._temp_sensors]
+        humis = [as_float(self._entities_state.get(eid)) for eid in self._humi_sensors]
+
+        valid_temps = [t for t in temps if t is not None]
+        valid_humis = [h for h in humis if h is not None]
+
+        if not valid_temps or not valid_humis:
+            _LOGGER.debug(
+                "%s: nessun dato valido (T:%d/%d, RH:%d/%d)",
+                self.entity_id, len(valid_temps), len(temps), len(valid_humis), len(humis)
+            )
+            self._attr_available = False
+            self._attr_native_value = None
+            return True
+
+        # 3) Medie sorgente (°C e %)
+        avg_temp_c = fmean(valid_temps)
+
+        norm_humis: list[float] = []
+        for h in valid_humis:
+            if 0.0 <= h <= 1.0:
+                h *= 100.0
+            norm_humis.append(max(0.0, min(100.0, h)))
+        avg_humi_pct = fmean(norm_humis)
+
+        # 4) Calcolo Heat Index in °C
+        try:
+            hi_c = float(heat_index_celsius(avg_temp_c, avg_humi_pct))
+        except Exception as ex:  # noqa: BLE001
+            _LOGGER.debug(
+                "%s: errore calc HI T=%.2f°C RH=%.2f%% → %s",
+                self.entity_id, avg_temp_c, avg_humi_pct, ex
+            )
+            self._attr_available = False
+            self._attr_native_value = None
+            return True
+
+        # 5) Conversione nell'unità richiesta (output °C/°F)
+        out_val = (
+            celsius_to_fahrenheit(hi_c)
+            if self._target_temp_unit == UnitOfTemperature.FAHRENHEIT
+            else hi_c
+        )
+
+        self._data_series.append(out_val)
+        if len(self._data_series) > self._window_size:
+            self._data_series = self._data_series[-self._window_size:]
+
+        smoothed = fmean(self._data_series) if self._data_series else out_val
+        attr_native_old_value = self._attr_native_value
+        self._attr_native_value = smoothed
+        self._attr_available = True
+
+        return attr_native_old_value != self._attr_native_value
 

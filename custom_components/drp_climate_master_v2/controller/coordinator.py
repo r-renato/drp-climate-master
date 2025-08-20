@@ -4,19 +4,19 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from typing import Any, Optional, List
+from typing import Any, Optional
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, Event, EventStateChangedData, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.const import PERCENTAGE
 
 from ..helpers.config_entries import (
     build_runtime_config,
     collect_entity_ids_for_state_changes,
     subscribe_entity_state_changes,
 )
-from ..sensor import DewpointSensor
-from ..const import DOMAIN, ENTITIES_STATE
+from ..const import DOMAIN, ENTITIES_STATE, NAME_AREA_HOME
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -79,11 +79,16 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def build_slave_sensor_defs(self) -> list[dict[str, Any]]:
         """Restituisce la lista dei sensori dew-point da creare (name/sensors/unit)."""
         defs: list[dict[str, Any]] = []
+
+        temps: list[str] = []
+        humis: list[str] = []
         
         for area in getattr(self._runtime.climate, "areas", []):
             if getattr(area, "indoor", False):
                 sensors = getattr(area, "sensors", None)
                 if sensors:
+                    temps.append(sensors.temperature)
+                    humis.append(sensors.humidity)
                     defs.append(
                         {
                             "type" : "DewpointSensor",
@@ -101,47 +106,82 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         }
                     )
 
-        _LOGGER.debug("build_dewpoint_sensor_defs: %d definizioni", len(defs))
+        defs.append(
+            {
+                "type" : "CurrentTemperatureSensor",
+                "name": f"Ambient {NAME_AREA_HOME}",
+                "temp_sensors": temps,
+                "unit": self._runtime.climate.temperature_unit,
+            }
+        )
+        defs.append(
+            {
+                "type" : "CurrentHumiditySensor",
+                "name": f"Ambient {NAME_AREA_HOME}",
+                "humi_sensors": humis,
+                "unit": PERCENTAGE,
+            }
+        )
+        defs.append(
+            {
+                "type" : "CurrentDewpointSensor",
+                "name": f"Ambient {NAME_AREA_HOME}",
+                "temp_sensors": temps,
+                "humi_sensors": humis,
+                "unit": self._runtime.climate.temperature_unit,
+            }
+        )
+        defs.append(
+            {
+                "type" : "CurrentHeatIndexSensor",
+                "name": f"Ambient {NAME_AREA_HOME}",
+                "temp_sensors": temps,
+                "humi_sensors": humis,
+                "unit": self._runtime.climate.temperature_unit,
+            }
+        )
+
+        _LOGGER.debug("build_climate_sensor_defs: %d definizioni", len(defs))
         return defs
 
-    async def async_setup_slave_entities(self) -> List[Any]:
-        """
-        Crea e registra le entity "slave" (es. sensori di dew-point per area).
-        """
-        slave_sensors = []
+    # async def async_setup_slave_entities(self) -> List[Any]:
+    #     """
+    #     Crea e registra le entity "slave" (es. sensori di dew-point per area).
+    #     """
+    #     slave_sensors = []
 
-        # Presumo che self._runtime.climate.areas sia una lista di oggetti con
-        # attributi: .indoor (bool), .name (str), .sensors (compatibile con DewpointSensor)
-        for area in getattr(self._runtime.climate, "areas", []):
-            if not getattr(area, "indoor", False):
-                continue
+    #     # Presumo che self._runtime.climate.areas sia una lista di oggetti con
+    #     # attributi: .indoor (bool), .name (str), .sensors (compatibile con DewpointSensor)
+    #     for area in getattr(self._runtime.climate, "areas", []):
+    #         if not getattr(area, "indoor", False):
+    #             continue
 
-            sensors = getattr(area, "sensors", None)
-            if not sensors:
-                _LOGGER.debug("Area '%s' senza sensors; salto", getattr(area, "name", "?"))
-                continue
+    #         sensors = getattr(area, "sensors", None)
+    #         if not sensors:
+    #             _LOGGER.debug("Area '%s' senza sensors; salto", getattr(area, "name", "?"))
+    #             continue
 
-            entity_name = f"Ambient {area.name}"
-            temperature_unit = self._runtime.climate.temperature_unit
+    #         entity_name = f"Ambient {area.name}"
+    #         temperature_unit = self._runtime.climate.temperature_unit
 
-            slave_sensors.append(
-                DewpointSensor(
-                    hass=self._hass,
-                    coordinator=self,
-                    entry=self._entry,
-                    name=entity_name,
-                    sensors=sensors,
-                    temperature_unit=temperature_unit,
-                )
-            )
+    #         slave_sensors.append(
+    #             DewpointSensor(
+    #                 hass=self._hass,
+    #                 coordinator=self,
+    #                 entry=self._entry,
+    #                 name=entity_name,
+    #                 sensors=sensors,
+    #                 temperature_unit=temperature_unit,
+    #             )
+    #         )
 
-        return slave_sensors
+    #     return slave_sensors
     # ---------------------- Event handling -------------------------- #
 
     @callback
     def entity_changed(self, event: Event[EventStateChangedData]) -> None:
         """Gestisce variazioni di stato sensori/attuatori sottoscritti."""
-        if self._stop_event.is_set():
+        if getattr(self, "_stop_event", None) and self._stop_event.is_set():
             return
 
         entity_id = event.data.get("entity_id")
@@ -154,6 +194,8 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # _LOGGER.debug("State changed: %s -> %s", entity_id, new_state.state)
         except Exception as ex:  # estrema difesa: non far mai esplodere il job
             _LOGGER.debug("Ignore state change for %s (%s)", entity_id, ex)
+
+        self.async_set_updated_data({})
 
     # ---------------------- Lifecycle hooks ------------------------- #
 

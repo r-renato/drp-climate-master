@@ -1,9 +1,13 @@
 #
 from __future__ import annotations
 
+import math
 import re
 from decimal import Decimal
 from typing import Any
+
+from homeassistant.core import State as HAState
+from homeassistant.const import STATE_UNKNOWN, STATE_UNAVAILABLE
 
 TRUE_STRINGS: set[str] = {"1", "true", "t", "yes", "y", "on"}
 FALSE_STRINGS: set[str] = {"0", "false", "f", "no", "n", "off", ""}
@@ -70,10 +74,16 @@ def as_float(
 ) -> float | None:
     """
     Converte input in float.
-    - float/int/Decimal: convertiti direttamente
-    - str: estrae il primo numero (accetta '.' o ','), ignora unità attigue
-    - None: -> default (o ValueError se strict)
+
+    Supporta:
+      - float/int/Decimal → cast diretto
+      - bool → 1.0/0.0
+      - str → estrae il primo numero (accetta '.' o ','); ignora unità attigue
+      - homeassistant.core.State → usa `state.state` (salta 'unknown'/'unavailable')
+      - None → `default` (o eccezione se `strict=True`)
+
     Applica clamp opzionale con min/max.
+    Rifiuta NaN/Inf (ritorna default o alza in strict).
     """
     if v is None:
         if strict:
@@ -81,6 +91,16 @@ def as_float(
         return default
 
     try:
+        # Caso: Home Assistant State
+        if isinstance(v, HAState):
+            s = v.state
+            if s in (STATE_UNKNOWN, STATE_UNAVAILABLE, None, ""):
+                if strict:
+                    raise ValueError(f"Cannot coerce HA State '{s}' to float")
+                return default
+            v = s  # prosegui come per stringa
+
+        # Primitive e numerici
         if isinstance(v, bool):
             x = 1.0 if v else 0.0
         elif isinstance(v, float):
@@ -93,18 +113,21 @@ def as_float(
             token = _first_number_token(v.strip())
             if token is None:
                 raise ValueError("no numeric token")
-            # normalizza separatore decimale
-            token = token.replace(",", ".")
+            token = token.replace(",", ".")  # normalizza separatore decimale
             x = float(token)
         else:
-            raise TypeError("unsupported type")
+            raise TypeError(f"unsupported type: {type(v).__name__}")
+
+        # Scarta NaN/Inf
+        if not math.isfinite(x):
+            raise ValueError("non-finite float")
+
     except Exception:
         if strict:
             raise
         return default
 
-    x = _clamp(x, min_value, max_value)
-    return x
+    return _clamp(x, min_value, max_value)
 
 def as_int(
     v: Any,
@@ -166,3 +189,63 @@ def slugify(text: str) -> str:
             out.append("_")
     slug = "".join(out).strip("_")
     return slug
+
+from typing import Any, Callable
+from decimal import Decimal
+
+def computed_float_or_none(
+    value_or_fn: Any | Callable[[], Any],
+    *,
+    precision: int | None = None,
+    min_value: float | None = None,
+    max_value: float | None = None,
+    strict: bool = False,
+) -> float | None:
+    """
+    Prova a calcolare/coercizzare un valore numerico in float.
+
+    - Se `value_or_fn` è callable -> lo esegue e usa il risultato.
+    - Altrimenti usa direttamente `value_or_fn`.
+    - Converte con `as_float(...)` (gestisce anche Home Assistant State).
+    - Applica clamp (min/max) e rounding opzionale.
+    - In caso di errori o valore non numerico -> None (o eccezione se strict=True).
+
+    Args:
+        value_or_fn: valore o funzione che ritorna un valore.
+        precision: cifre decimali per round (None = nessun round).
+        min_value, max_value: clamp opzionale.
+        strict: se True, propaga eccezioni di parsing.
+
+    Returns:
+        float | None
+    """
+    try:
+        raw = value_or_fn() if callable(value_or_fn) else value_or_fn
+    except Exception:
+        if strict:
+            raise
+        return None
+
+    x = as_float(
+        raw,
+        default=None,
+        min_value=min_value,
+        max_value=max_value,
+        strict=strict,
+    )
+    if x is None:
+        return None
+
+    if precision is not None:
+        try:
+            x = round(float(x), precision)
+        except Exception:
+            x = float(x)
+    return x
+
+
+
+
+
+
+
