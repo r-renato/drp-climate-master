@@ -16,7 +16,7 @@ from ..helpers.config_entries import (
     collect_entity_ids_for_state_changes,
     subscribe_entity_state_changes,
 )
-from ..const import DOMAIN, ENTITIES_STATE, NAME_AREA_HOME
+from ..const import CONF_INDOOR, CONF_RADIANT, DOMAIN, ENTITIES_STATE, NAME_AREA_HOME
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -61,7 +61,7 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             update_interval=self._runtime.update_interval,  # loop SLOW
         )
 
-        _LOGGER.debug("ClimateCoordinator initialized")
+        _LOGGER.debug("ClimateCoordinator initialized. Update each %s seconds", self._runtime.update_interval)
 
     # ----------------- Accesso allo store condiviso ----------------- #
 
@@ -84,7 +84,7 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         humis: list[str] = []
         
         for area in getattr(self._runtime.climate, "areas", []):
-            if getattr(area, "indoor", False):
+            if getattr(area, CONF_INDOOR, False) and getattr(area, CONF_RADIANT, False):
                 sensors = getattr(area, "sensors", None)
                 if sensors:
                     temps.append(sensors.temperature)
@@ -195,7 +195,9 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except Exception as ex:  # estrema difesa: non far mai esplodere il job
             _LOGGER.debug("Ignore state change for %s (%s)", entity_id, ex)
 
-        self.async_set_updated_data({})
+        # NOTA: non toccare async_set_updated_data qui
+        # self.async_set_updated_data({})
+        self.async_update_listeners()   # avvisa le entity senza resettare l’interval
 
     # ---------------------- Lifecycle hooks ------------------------- #
 
@@ -251,6 +253,7 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         Importante: niente side-effect (niente comandi agli attuatori).
         """
         try:
+            _LOGGER.debug("_entities_state keys %s", self._entities_state.keys())
             # TODO: leggere da adapters e costruire snapshot parziale
             # Esempio:
             # snapshot = {
