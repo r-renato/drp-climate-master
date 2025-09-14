@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import Enum, StrEnum, unique
 from typing import Optional, Dict, List
 
 # -------------------- High-level operating enums -------------------- #
@@ -19,4 +19,11 @@ class HVACOperatingProfile(Enum):
         """Restituisce i valori come lista di stringhe (es. ['comfort', 'eco', ...])."""
         return [m.value for m in cls]
 
-    
+# -------------------- Season enums -------------------- #
+@unique
+class Seasons(StrEnum):
+    """Meteorological seasons."""
+    WINTER = "winter"
+    SPRING = "spring"
+    SUMMER = "summer"
+    AUTUMN = "autumn"

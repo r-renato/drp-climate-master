@@ -5,18 +5,28 @@ import asyncio
 import contextlib
 import logging
 from typing import Any, Optional
+from datetime import date, timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, Event, EventStateChangedData, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.const import PERCENTAGE
 
+from ..domain.models import WeatherDailySample
 from ..helpers.config_entries import (
     build_runtime_config,
     collect_entity_ids_for_state_changes,
     subscribe_entity_state_changes,
 )
-from ..const import CONF_INDOOR, CONF_RADIANT, DOMAIN, ENTITIES_STATE, NAME_AREA_HOME
+from ..weather.pirateweather import PirateWeatherConfig, ProviderOptions, create_pirateweather_provider
+
+from ..const import (
+    CONF_INDOOR,
+    CONF_RADIANT,
+    DOMAIN,
+    ENTITIES_STATE,
+    NAME_AREA_HOME,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -207,6 +217,65 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         _LOGGER.debug("First refresh completed")
         await self.async_start_fast_loop()
 
+
+        lat, lon = 41.9238, 12.4125
+
+        cfg = PirateWeatherConfig(
+            api_key="4mtCz6m3gmiEAvgjQdbB9pB6ndZFR67E",
+            lat=lat,
+            lon=lon,
+            units="si",          # °C
+            # base_url=None      # opzionale, solo per backend HTTP
+            base_url="https://timemachine.pirateweather.net/forecast",
+        )
+
+        # Opzioni di robustezza/performance
+        opts = ProviderOptions(
+            max_concurrency=6,    # limita richieste/conversioni in parallelo
+            retries=2,            # tentativi aggiuntivi (totale = retries+1)
+            backoff_base=0.5,
+            backoff_factor=2.0,
+            jitter=0.25,
+            ttl_seconds=6*3600,   # cache per-day (6h)
+            http_timeout_s=20,
+        )
+        # --- Creazione provider (usa libreria se installata, altrimenti HTTP) ---
+        provider = create_pirateweather_provider(cfg, opts=opts)
+
+        # Consigliato: riusare la sessione HTTP con il context manager
+        async with provider:
+            today = date.today()
+            window_days = 10
+
+            cur_start = today - timedelta(days=window_days - 1)
+            cur_end = today
+
+            # last_start = safe_subtract_one_year(cur_start)
+            # last_end = safe_subtract_one_year(cur_end)
+
+            # --- Leggi gli ultimi 10 giorni ---
+            current_samples = await provider.daily_range(cur_start, cur_end)
+
+            # --- Leggi la finestra “gemella” dell’anno scorso ---
+            # yearago_samples = await provider.daily_range(last_start, last_end)
+
+        # --- Stampa riepilogo semplice ---
+        def brief(sample: WeatherDailySample) -> str:
+            return (
+                f"{sample.day.isoformat()}  "
+                f"Tmin={sample.tmin}  Tmax={sample.tmax}  "
+                f"Tmean={sample.tmean}  DP={sample.dew_point}  RH={sample.humidity}"
+            )
+
+        print("\n== Ultimi 10 giorni ==")
+        for s in current_samples:
+            _LOGGER.debug(brief(s))
+
+        # print("\n== Finestra gemella anno scorso ==")
+        # for s in yearago_samples:
+        #     print(brief(s))
+
+
     async def async_start_fast_loop(self) -> None:
         """Avvia il loop FAST (PID miscelatrice / H% VMC / rate limit)."""
         if self._fast_task:
@@ -253,7 +322,7 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         Importante: niente side-effect (niente comandi agli attuatori).
         """
         try:
-            _LOGGER.debug("_entities_state keys %s", self._entities_state.keys())
+            # _LOGGER.debug("_entities_state keys %s", self._entities_state.keys())
             # TODO: leggere da adapters e costruire snapshot parziale
             # Esempio:
             # snapshot = {
