@@ -199,6 +199,13 @@ CONF_LOW_WATER_TEMP: Final[str] = "low_water_temp"
 CONF_HIGH_WATER_TEMP: Final[str] = "high_water_temp"
 CONF_ALARM: Final[str] = "alarm"
 
+# Weather
+CONF_PROVIDER: Final[str] = "provider"
+CONF_HISTORICAL_DATA: Final[str] = "historical_data"
+CONF_TOKEN: Final[str] = "token"
+CONF_LATITUDE: Final[str] = "latitude"
+CONF_LONGITUDE: Final[str] = "longitude"
+
 # ======================================================
 # SCENARIOS
 # ======================================================

@@ -54,9 +54,12 @@ from ..const import (
     CONF_HEATING_T_SETPOINT,
     CONF_HIGH_PRESSURE,
     CONF_HIGH_WATER_TEMP,
+    CONF_HISTORICAL_DATA,
     CONF_HOME_WINDOWS_STATE,
     CONF_HUMIDITY,
     CONF_INDOOR,
+    CONF_LATITUDE,
+    CONF_LONGITUDE,
     CONF_LOW_WATER_TEMP,
     CONF_MAX_TEMP,
     CONF_MIN_TEMP,
@@ -68,6 +71,7 @@ from ..const import (
     CONF_POWER,
     CONF_POWER_ON_NIGHT,
     CONF_POWER_ON_TODAY,
+    CONF_PROVIDER,
     CONF_RADIANT,
     CONF_REQUESTS,
     CONF_SCENARIOS,
@@ -84,6 +88,7 @@ from ..const import (
     CONF_TCOLLECTOR,
     CONF_TEMPERATURE,
     CONF_THREE_POINT_MIXING_VALVE,
+    CONF_TOKEN,
     CONF_VACATION,
     CONF_VALUE,
     CONF_VENT_RECIRCULATION,
@@ -255,6 +260,20 @@ DEVICES_SCHEMA = vol.Schema(
     }
 )
 
+WEATHER_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_PROVIDER): cv.string,
+        vol.Required(CONF_HISTORICAL_DATA) : vol.Schema(
+            {
+                vol.Required(CONF_PROVIDER): cv.string,
+                vol.Optional(CONF_TOKEN): cv.string,
+                vol.Optional(CONF_LATITUDE): cv.string,
+                vol.Optional(CONF_LONGITUDE): cv.string,
+            }
+        )
+    }
+)
+
 BASE_CLIMATE_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_NAME): cv.string,
@@ -272,7 +291,7 @@ BASE_CLIMATE_SCHEMA = vol.Schema(
         vol.Optional(CONF_DEVICES): vol.All(DEVICES_SCHEMA),
 
         vol.Required(CONF_HOME_WINDOWS_STATE): cv.entity_id,
-        vol.Required(CONF_WEATHER): cv.string,
+        vol.Required(CONF_WEATHER): vol.All(WEATHER_SCHEMA),
         vol.Required(CONF_SCENARIOS) : vol.Schema(
             {
                 vol.Required(CONF_VACATION): cv.string,

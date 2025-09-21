@@ -5,20 +5,20 @@ import asyncio
 import contextlib
 import logging
 from typing import Any, Optional
-from datetime import date, timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, Event, EventStateChangedData, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.const import PERCENTAGE
 
-from ..domain.models import WeatherDailySample
 from ..helpers.config_entries import (
     build_runtime_config,
     collect_entity_ids_for_state_changes,
     subscribe_entity_state_changes,
 )
-from ..weather.pirateweather import PirateWeatherConfig, ProviderOptions, create_pirateweather_provider
+from ..weather.forecast_provider import WeatherForecast
+from ..weather.historical_pirateweather import PirateWeatherConfig, ProviderOptions, get_pirateweather_historical_provider
+from ..season.detector import WeatherSeasonDetector
 
 from ..const import (
     CONF_INDOOR,
@@ -211,13 +211,7 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     # ---------------------- Lifecycle hooks ------------------------- #
 
-    async def async_config_entry_first_refresh(self) -> None:
-        """Primo refresh: dopo il SLOW loop, avvia il FAST loop."""
-        await super().async_config_entry_first_refresh()
-        _LOGGER.debug("First refresh completed")
-        await self.async_start_fast_loop()
-
-
+    async def _async_temp_test_weater(self) -> None:
         lat, lon = 41.9238, 12.4125
 
         cfg = PirateWeatherConfig(
@@ -236,44 +230,60 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             backoff_base=0.5,
             backoff_factor=2.0,
             jitter=0.25,
-            ttl_seconds=6*3600,   # cache per-day (6h)
+            # ttl_seconds=6*3600,   # cache per-day (6h)
             http_timeout_s=20,
         )
         # --- Creazione provider (usa libreria se installata, altrimenti HTTP) ---
-        provider = create_pirateweather_provider(cfg, opts=opts)
+        historical_provider = get_pirateweather_historical_provider(self._hass, cfg, opts=opts)
+        weather_forecast = WeatherForecast( self._hass, "weather.home_rome", forecast_type="daily")
 
-        # Consigliato: riusare la sessione HTTP con il context manager
-        async with provider:
-            today = date.today()
-            window_days = 10
+        weather_season_detector = WeatherSeasonDetector(weatherHistorical=historical_provider, weatherForecast=weather_forecast)
 
-            cur_start = today - timedelta(days=window_days - 1)
-            cur_end = today
+        weather_season_data = await weather_season_detector.detect()
+        _LOGGER.debug("async_config_entry_first_refresh %s", weather_season_data)
 
-            # last_start = safe_subtract_one_year(cur_start)
-            # last_end = safe_subtract_one_year(cur_end)
 
-            # --- Leggi gli ultimi 10 giorni ---
-            current_samples = await provider.daily_range(cur_start, cur_end)
+    async def async_config_entry_first_refresh(self) -> None:
+        """Primo refresh: dopo il SLOW loop, avvia il FAST loop."""
+        await super().async_config_entry_first_refresh()
+        _LOGGER.debug("First refresh completed")
+        await self.async_start_fast_loop()
 
-            # --- Leggi la finestra “gemella” dell’anno scorso ---
-            # yearago_samples = await provider.daily_range(last_start, last_end)
+        
 
-        # --- Stampa riepilogo semplice ---
-        def brief(sample: WeatherDailySample) -> str:
-            return (
-                f"{sample.day.isoformat()}  "
-                f"Tmin={sample.tmin}  Tmax={sample.tmax}  "
-                f"Tmean={sample.tmean}  DP={sample.dew_point}  RH={sample.humidity}"
-            )
 
-        print("\n== Ultimi 10 giorni ==")
-        for s in current_samples:
-            _LOGGER.debug(brief(s))
+        # # Consigliato: riusare la sessione HTTP con il context manager
+        # async with provider:
+        #     today = date.today()
+        #     window_days = 10
 
-        # print("\n== Finestra gemella anno scorso ==")
-        # for s in yearago_samples:
-        #     print(brief(s))
+        #     cur_start = today - timedelta(days=window_days - 1)
+        #     cur_end = today
+
+        #     # last_start = safe_subtract_one_year(cur_start)
+        #     # last_end = safe_subtract_one_year(cur_end)
+
+        #     # --- Leggi gli ultimi 10 giorni ---
+        #     current_samples = await provider.daily_range(cur_start, cur_end)
+
+        #     # --- Leggi la finestra “gemella” dell’anno scorso ---
+        #     # yearago_samples = await provider.daily_range(last_start, last_end)
+
+        # # --- Stampa riepilogo semplice ---
+        # def brief(sample: Forecast) -> str:
+        #     return (
+        #         f"{sample['datetime']}  "
+        #         f"Tmin={sample.get('templow')}  Tmax={sample.get('temperature')}  "
+        #         # f"Tmean={sample.tmean}  DP={sample.dew_point}  RH={sample.humidity}"
+        #     )
+
+        # print("\n== Ultimi 10 giorni ==")
+        # for s in current_samples:
+        #     _LOGGER.debug(brief(s))
+
+        # # print("\n== Finestra gemella anno scorso ==")
+        # # for s in yearago_samples:
+        # #     print(brief(s))
 
 
     async def async_start_fast_loop(self) -> None:
@@ -329,6 +339,7 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             #     "timestamp": self._hass.helpers.event.async_call_later(...),
             #     "areas": {...},
             # }
+            await self._async_temp_test_weater()
             return {}
         except Exception as exc:
             raise UpdateFailed(f"Update failed: {exc}") from exc

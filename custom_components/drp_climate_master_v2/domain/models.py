@@ -300,13 +300,13 @@ class SeasonState:
 
         return "\n".join(lines)
 
-# ---- Weather model ----------------------------------------------
+# # ---- Weather model ----------------------------------------------
 
-@dataclass(slots=True, frozen=True)
-class WeatherDailySample:
-    day: date
-    tmin: float | None
-    tmax: float | None
-    tmean: float | None
-    dew_point: float | None
-    humidity: float | None  # normalized to 0..100
+# @dataclass(slots=True, frozen=True)
+# class WeatherDailySample:
+#     day: date
+#     tmin: float | None
+#     tmax: float | None
+#     tmean: float | None
+#     dew_point: float | None
+#     humidity: float | None  # normalized to 0..100

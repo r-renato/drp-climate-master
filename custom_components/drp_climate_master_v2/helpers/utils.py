@@ -64,6 +64,46 @@ def as_bool(
         raise ValueError(f"Cannot coerce {v!r} to bool")
     return default
 
+def ratio_or_percent_to_int(v: float | None) -> int | None:
+    """
+    Converte un valore percentuale espresso come frazione in [0..1]
+    *oppure* già in percento [0..100] in un intero compreso tra 0 e 100.
+
+    Regole:
+    - `None` → `None`
+    - `NaN`/±`inf` → `None`
+    - Valori in [0..1] (con piccola tolleranza) sono interpretati come frazione e moltiplicati ×100.
+    - Altri valori sono interpretati come percento già espresso.
+    - Clamping finale a [0, 100] e arrotondamento al più vicino intero.
+
+    Esempi:
+    >>> _pct01_to_pct100_int(None) is None
+    True
+    >>> _pct01_to_pct100_int(0.456)
+    46
+    >>> _pct01_to_pct100_int(1.0)
+    100
+    >>> _pct01_to_pct100_int(72.3)
+    72
+    >>> _pct01_to_pct100_int(-0.1)   # clamp a 0
+    0
+    >>> _pct01_to_pct100_int(123.4)  # clamp a 100
+    100
+    >>> _pct01_to_pct100_int(float("nan")) is None
+    True
+    """
+    if v is None or not math.isfinite(v):
+        return None
+
+    # Tolleranza per errori floating (es. 1.0000000002)
+    _EPS = 1e-9
+    if -_EPS <= v <= 1.0 + _EPS:
+        v *= 100.0
+
+    # Clamp e arrotondamento
+    v = max(0.0, min(100.0, v))
+    return int(round(v))
+
 def as_float(
     v: Any,
     default: float | None = None,
