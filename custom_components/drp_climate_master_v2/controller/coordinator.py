@@ -11,11 +11,14 @@ from homeassistant.core import HomeAssistant, Event, EventStateChangedData, call
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.const import PERCENTAGE
 
+from ..domain.models import SeasonState
+
 from ..helpers.config_entries import (
     build_runtime_config,
     collect_entity_ids_for_state_changes,
     subscribe_entity_state_changes,
 )
+from ..weather.provider import WeatherHistoricalProvider
 from ..weather.forecast_provider import WeatherForecast
 from ..weather.historical_pirateweather import PirateWeatherConfig, ProviderOptions, get_pirateweather_historical_provider
 from ..season.detector import WeatherSeasonDetector
@@ -63,6 +66,28 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Loop FAST
         self._fast_task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
+
+        self._weather_forecast_provider = WeatherForecast(
+            self._hass,
+            self._runtime.climate.weather.forecast_data.provider,
+            forecast_type="daily"
+        )
+        self._weather_historical_provider: WeatherHistoricalProvider
+        if "pirateweather" == self._runtime.climate.weather.historical_data.provider:
+            self._weather_historical_provider: WeatherHistoricalProvider = get_pirateweather_historical_provider(
+                self._hass, 
+                PirateWeatherConfig(
+                    api_key=self._runtime.climate.weather.historical_data.token,
+                    lat=self._runtime.climate.weather.historical_data.latitude,
+                    lon=self._runtime.climate.weather.historical_data.longitude,
+                    units=self._runtime.climate.units,
+                )
+            )
+        self._season_detector = WeatherSeasonDetector(
+            weatherHistorical=self._weather_historical_provider,
+            weatherForecast=self._weather_forecast_provider
+        )
+        self._season_data: SeasonState
 
         super().__init__(
             hass,
@@ -339,7 +364,9 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             #     "timestamp": self._hass.helpers.event.async_call_later(...),
             #     "areas": {...},
             # }
-            await self._async_temp_test_weater()
+            # await self._async_temp_test_weater()
+            self._season_data = await self._season_detector.detect()
+            _LOGGER.debug("_async_update_data %s", self._season_data)
             return {}
         except Exception as exc:
             raise UpdateFailed(f"Update failed: {exc}") from exc

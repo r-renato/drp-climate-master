@@ -9,6 +9,7 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.helpers import selector
+from homeassistant.helpers import config_validation as cv
 from homeassistant.const import (
     CONF_NAME,
     CONF_UNIQUE_ID,
@@ -17,6 +18,8 @@ from homeassistant.const import (
 
 # Tipi flow: garantiamo compatibilità (2025.4.4 e fallback)
 from homeassistant.config_entries import ConfigFlow, OptionsFlow
+
+from .domain.schema import WEATHER_SCHEMA
 try:
     from homeassistant.config_entries import ConfigFlowResult  # type: ignore
 except Exception:  # pragma: no cover
@@ -30,7 +33,7 @@ except Exception:  # pragma: no cover
 from .const import (
     DOMAIN,
     INTEGRATION_NAME,
-    # Chiavi usate nello YAML/schema
+    # Chiavi schema / YAML
     CONF_AREA,
     CONF_AREAS,
     CONF_DEVICES,
@@ -45,7 +48,15 @@ from .const import (
     CONF_MIN_TEMP,
     CONF_STEP,
     DEFAULT_TEMP_UNIT,
+    # Weather nested keys
+    CONF_FORECAST_DATA,
+    CONF_HISTORICAL_DATA,
+    CONF_PROVIDER,
+    CONF_TOKEN,
+    CONF_LATITUDE,
+    CONF_LONGITUDE,
 )
+
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -106,7 +117,6 @@ def _validate_devices(dev: dict) -> Optional[str]:
         return None
     if not isinstance(dev, dict):
         return "Il campo 'devices' deve essere un oggetto."
-    # Check superficiali sui blocchi noti: se presenti, devono essere object
     for blk in ("supply_units", "radiant", "vmc"):
         if blk in dev and not isinstance(dev[blk], dict):
             return f"'devices.{blk}' deve essere un oggetto."
@@ -126,12 +136,33 @@ def _validate_scenarios(sc: dict) -> Optional[str]:
     return None
 
 
+def _coerce_weather_latlon(weather: dict) -> dict:
+    """Converte latitude/longitude in float se presenti."""
+    if not isinstance(weather, dict):
+        return weather
+    hist = weather.get(CONF_HISTORICAL_DATA) or {}
+    if not isinstance(hist, dict):
+        return weather
+    if CONF_LATITUDE in hist:
+        try:
+            hist[CONF_LATITUDE] = float(hist[CONF_LATITUDE])
+        except (TypeError, ValueError):
+            raise ValueError("historical_data.latitude deve essere numerico.")
+    if CONF_LONGITUDE in hist:
+        try:
+            hist[CONF_LONGITUDE] = float(hist[CONF_LONGITUDE])
+        except (TypeError, ValueError):
+            raise ValueError("historical_data.longitude deve essere numerico.")
+    weather[CONF_HISTORICAL_DATA] = hist
+    return weather
+
+
 def _yaml_climate_to_entry_payload(hub_name: str, climate: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, Any]]:
     """
     Converte un blocco 'climate' YAML in (entry.data, entry.options).
 
     data:
-      - hub_name, climate_name, climate_unique_id, home_windows_state, weather
+      - hub_name, climate_name, climate_unique_id, home_windows_state, weather (mapping)
     options:
       - strutture complesse: areas, devices, scenarios
       - runtime defaults: update_interval_s, supports_*, setpoint_step_c, manual_override_minutes
@@ -176,6 +207,13 @@ def _yaml_climate_to_entry_payload(hub_name: str, climate: Dict[str, Any]) -> tu
     if min_t >= max_t:
         raise ValueError("min_temp deve essere < max_temp.")
 
+    # ✅ Valida lo shape di weather e normalizza lat/lon
+    try:
+        weather = WEATHER_SCHEMA(weather)
+    except vol.Invalid as e:
+        raise ValueError(f"Weather non valido: {e}") from e
+    weather = _coerce_weather_latlon(dict(weather))
+
     data: Dict[str, Any] = {
         CONF_HUB_NAME: hub_name,
         CONF_CLIMATE_NAME: climate_name,
@@ -210,7 +248,7 @@ def _yaml_climate_to_entry_payload(hub_name: str, climate: Dict[str, Any]) -> tu
 class DrpClimateMasterConfigFlow(ConfigFlow, domain=DOMAIN):
     """Gestisce il Config Flow di DRP Climate Master."""
 
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self) -> None:
         self._stored_user_input: Dict[str, Any] = {}
@@ -222,7 +260,25 @@ class DrpClimateMasterConfigFlow(ConfigFlow, domain=DOMAIN):
             climate_name = user_input[CONF_CLIMATE_NAME]
             unique_id = user_input[CONF_CLIMATE_UNIQUE_ID]
             home_windows = user_input[CONF_HOME_WINDOWS_STATE]
-            weather = user_input[CONF_WEATHER]
+
+            # UI: l'utente seleziona l'entity 'weather.*' → incapsuliamo nel mapping coerente con WEATHER_SCHEMA
+            weather_entity = user_input[CONF_WEATHER]
+            weather_block = {
+                CONF_FORECAST_DATA: {CONF_PROVIDER: str(weather_entity)},
+                # Preimpostiamo historical con provider base (l'utente completerà via YAML/aggiornamenti)
+                CONF_HISTORICAL_DATA: {CONF_PROVIDER: "pirateweather"},
+            }
+
+            # ✅ valida il mapping costruito
+            try:
+                weather_block = WEATHER_SCHEMA(weather_block)
+            except vol.Invalid as e:
+                data_schema = self._user_schema()
+                return self.async_show_form(
+                    step_id="user",
+                    data_schema=data_schema,
+                    errors={"base": f"Weather non valido: {e}"},
+                )
 
             # Unicità basata su unique_id del climate (se fornita)
             if unique_id:
@@ -234,7 +290,7 @@ class DrpClimateMasterConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_CLIMATE_NAME: climate_name,
                 CONF_CLIMATE_UNIQUE_ID: unique_id,
                 CONF_HOME_WINDOWS_STATE: home_windows,
-                CONF_WEATHER: weather,
+                CONF_WEATHER: dict(weather_block),  # mapping coerente con YAML
             }
 
             # Valori di default coerenti con schema (le strutture si editano in Options)
@@ -261,7 +317,11 @@ class DrpClimateMasterConfigFlow(ConfigFlow, domain=DOMAIN):
                 options=options,
             )
 
-        data_schema = vol.Schema(
+        return self.async_show_form(step_id="user", data_schema=self._user_schema())
+
+    def _user_schema(self) -> vol.Schema:
+        """Schema per lo step user."""
+        return vol.Schema(
             {
                 vol.Required(CONF_HUB_NAME): str,
                 vol.Required(CONF_CLIMATE_NAME): str,
@@ -269,12 +329,12 @@ class DrpClimateMasterConfigFlow(ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_HOME_WINDOWS_STATE): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain="binary_sensor")
                 ),
+                # UI: l'utente seleziona un entity_id weather.*; lo incapsuliamo in un mapping compatibile con WEATHER_SCHEMA
                 vol.Required(CONF_WEATHER): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain="weather")
                 ),
             }
         )
-        return self.async_show_form(step_id="user", data_schema=data_schema)
 
     async def async_step_import(self, import_config: Dict[str, Any]) -> ConfigFlowResult:
         """Import da YAML: converte la YAML in uno (o più) ConfigEntry, evitando duplicati."""

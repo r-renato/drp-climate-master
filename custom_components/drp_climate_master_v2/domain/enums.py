@@ -27,3 +27,13 @@ class Seasons(StrEnum):
     SPRING = "spring"
     SUMMER = "summer"
     AUTUMN = "autumn"
+
+    def __str__(self) -> str:
+        """Rappresentazione leggibile in italiano."""
+        mapping = {
+            Seasons.WINTER: "Winter",
+            Seasons.SPRING: "Spring",
+            Seasons.SUMMER: "Summer",
+            Seasons.AUTUMN: "Autumn",
+        }
+        return mapping.get(self, self.value)

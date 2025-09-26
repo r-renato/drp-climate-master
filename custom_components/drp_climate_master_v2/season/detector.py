@@ -1,33 +1,30 @@
-#
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
-from datetime import date, timedelta, datetime
-from typing import (
-    Any,
-    Dict,
-    Iterable,
-    List,
-    Mapping,
-    Optional,
-    Protocol,
-    Tuple,
-    Literal,
-    cast,
-)
 import calendar
 import logging
+from dataclasses import dataclass
+from datetime import date, timedelta, datetime
+from typing import Any, Dict, List, Mapping, Optional, Tuple, Literal, cast
 
 from homeassistant.util import dt as dt_util
 
+from ..helpers.logger import log_debug
+
 from ..weather.provider import WeatherForecastProvider, WeatherHistoricalProvider
-
 from ..domain.models import SeasonState
-
 from ..domain.enums import Seasons
 
 _LOGGER = logging.getLogger(__name__)
+
+# Ordine canonico delle stagioni (emisfero nord): utile per ordinamenti coerenti
+_SEASON_ORDER: Tuple[Seasons, Seasons, Seasons, Seasons] = (
+    Seasons.WINTER,
+    Seasons.SPRING,
+    Seasons.SUMMER,
+    Seasons.AUTUMN,
+)
+
 
 class SeasonCalendar:
     """
@@ -39,74 +36,32 @@ class SeasonCalendar:
         `year` è l'anno in cui l'INVERNO termina (Febbraio di `year`).
         Esempio: SeasonCalendar(2025) → Winter: 2024-12-01 .. 2025-02-28/29.
 
-    Emisferi:
+    Emisferi supportati:
         - "north":  WINTER=Dec-Feb, SPRING=Mar-May, SUMMER=Jun-Aug, AUTUMN=Sep-Nov
         - "south":  SUMMER=Dec-Feb, AUTUMN=Mar-May, WINTER=Jun-Aug, SPRING=Sep-Nov
 
-    Caratteristiche:
-        - `Seasons` come StrEnum per label stabili
-        - `SeasonWindow` (dataclass immutabile, con metodo `contains`)
-        - API principali: `windows()`, `as_dict()`, `season_for(date)`
-        - Fluent helpers: `with_year()`, `with_hemisphere()`
-        - Sicura rispetto ad anni bisestili (chiusura Feb via `calendar.monthrange`)
+    API principali:
+        - `windows()`     → Dict[Seasons, SeasonWindow]
+        - `as_dict()`     → Dict[Seasons, Tuple[date, date]]
+        - `season_for(d)` → Seasons (gestione corretta DJF)
+        - helper fluenti: `with_year(y)`, `with_hemisphere(h)`
 
-    Note su `season_for(date)`:
-        Per gestire l'inverno a cavallo dell'anno, la ricerca copre le finestre
-        dell'anno precedente, corrente e successivo. In pratica:
-            for y in (d.year - 1, d.year, d.year + 1): ...
-        Questo evita ambiguità sul cambio anno e mantiene O(1) in ogni caso.
-
-    Esempi
-    -------
-    >>> from datetime import date
-    >>> cal = SeasonCalendar(2025)              # emisfero nord
-    >>> wins = cal.windows()
-    >>> wins[Seasons.WINTER].start, wins[Seasons.WINTER].end
-    (date(2024, 12, 1), date(2025, 2, 28))  # o 29 se bisestile
-    >>> cal.season_for(date(2024, 12, 15))
-    <Seasons.WINTER: 'winter'>
-    >>> cal.season_for(date(2025, 6, 10))
-    <Seasons.SUMMER: 'summer'>
-
-    Best practice d'uso:
-        - Usare `SeasonCalendar.today().season_for(date.today())` come baseline
-          per detector/strategie, poi applicare eventuali override (ondate di
-          caldo/freddo, dew point elevato, ecc.).
-        - Non assumere alcun ordinamento della dict: se serve una sequenza
-          ordinata, derivarla esplicitamente (es. [WINTER, SPRING, SUMMER, AUTUMN]).
+    Note:
+        - Le finestre sono **inclusive** [start, end].
+        - L’istanza è leggera; nessun caching necessario nella maggior parte dei casi.
     """
 
     @dataclass(frozen=True, slots=True)
     class SeasonWindow:
         """
         Finestra stagionale inclusiva [start, end] per una determinata `season`.
-
-        Attributi:
-            season: Istanza di `Seasons` (WINTER, SPRING, SUMMER, AUTUMN).
-            start:  Data di inizio (inclusa).
-            end:    Data di fine (inclusa).
-
-        Proprietà:
-            - Immutabile (frozen=True).
-            - Efficiente in memoria (slots=True).
         """
         season: Seasons
         start: date  # inclusive
         end: date    # inclusive
 
         def contains(self, d: date) -> bool:
-            """
-            Verifica se una data rientra nella finestra stagionale inclusiva.
-
-            Args:
-                d: Data da testare.
-
-            Returns:
-                True se `start <= d <= end`, altrimenti False.
-
-            Complessità:
-                O(1).
-            """
+            """True se `start <= d <= end`."""
             return self.start <= d <= self.end
 
     def __init__(
@@ -123,165 +78,69 @@ class SeasonCalendar:
                   Se None, viene usato l'anno corrente (`date.today().year`).
             hemisphere: Emisfero di riferimento ("north" o "south").
 
-        Effetti:
-            Imposta `self._year` e `self._hemisphere`.
-
-        Note:
-            La scelta di `year` come "anno di termine inverno" semplifica il mapping
-            della finestra DJF che attraversa il confine di anno.
+        Raises:
+            ValueError: se `hemisphere` non è tra {"north","south"}.
         """
         self._year: int = year if year is not None else date.today().year
-        self._hemisphere: Literal["north"] | Literal["south"] = hemisphere
+        hemi = (hemisphere or "north").lower()
+        if hemi not in ("north", "south"):
+            raise ValueError(f"Invalid hemisphere: {hemisphere}")
+        self._hemisphere: Literal["north", "south"] = cast(Literal["north", "south"], hemi)
 
     # ---- fluent helpers ------------------------------------------------------
     def with_year(self, year: int) -> "SeasonCalendar":
-        """
-        Crea una nuova istanza con lo stesso emisfero ma anno diverso.
-
-        Args:
-            year: Nuovo anno logico (anno in cui termina l'inverno).
-
-        Returns:
-            SeasonCalendar: nuova istanza con `year` aggiornato.
-
-        Use-case:
-            Iterare facilmente su anni adiacenti senza mutare l’istanza originale.
-        """
+        """Ritorna una nuova istanza con stesso emisfero ma anno diverso."""
         return SeasonCalendar(year, hemisphere=self._hemisphere)
 
     def with_hemisphere(self, hemisphere: Literal["north", "south"]) -> "SeasonCalendar":
-        """
-        Crea una nuova istanza con lo stesso anno ma emisfero diverso.
-
-        Args:
-            hemisphere: "north" o "south".
-
-        Returns:
-            SeasonCalendar: nuova istanza con `hemisphere` aggiornato.
-
-        Use-case:
-            Supportare deployment multi-sito su emisferi differenti.
-        """
+        """Ritorna una nuova istanza con stesso anno ma emisfero diverso."""
         return SeasonCalendar(self._year, hemisphere=hemisphere)
 
     # ---- API -----------------------------------------------------------------
     def windows(self) -> Dict[Seasons, "SeasonCalendar.SeasonWindow"]:
         """
         Restituisce le finestre stagionali meteorologiche per l'anno/emisfero correnti.
-
-        Returns:
-            Dict[Seasons, SeasonWindow]: mapping dalle 4 stagioni alle rispettive finestre
-            inclusive [start, end].
-
-        Proprietà:
-            - Le finestre NON si sovrappongono e coprono l'intero anno logico.
-            - Per l'emisfero nord, WINTER: Dec(y-1) → Feb(y). Per il sud, SUMMER: Dec(y-1) → Feb(y).
-
-        Complessità:
-            O(1).
-
-        Note:
-            Internamente delega a `_north_windows()` o `_south_windows()`.
         """
         if self._hemisphere == "south":
             return self._south_windows(self._year)
         return self._north_windows(self._year)
 
     def as_dict(self) -> Dict[Seasons, Tuple[date, date]]:
-        """
-        Restituisce un mapping comodo (retro-compat) delle finestre come tuple (start, end).
-
-        Returns:
-            Dict[Seasons, Tuple[date, date]]: dizionario stagione → (start, end).
-
-        Use-case:
-            Interfacce legacy o serializzazione minimale senza dataclass.
-
-        Complessità:
-            O(1).
-        """
+        """Retro-compat: mapping stagione → (start, end)."""
         wins = self.windows()
         return {s: (w.start, w.end) for s, w in wins.items()}
 
-    def season_for(self, d: date = date.today()) -> Seasons:
+    def season_for(self, d: Optional[date] = None) -> Seasons:
         """
-        Determina la stagione meteorologica di una data, gestendo correttamente DJF a cavallo anno.
+        Determina la stagione meteorologica di una data, gestendo DJF a cavallo anno.
 
         Args:
-            d: Data da classificare (emisfero già implicito nell'istanza).
+            d: Data da classificare. Se None, `date.today()`.
 
         Returns:
-            Seasons: Stagione corrispondente a `d`.
-
-        Strategia:
-            Per evitare ambiguità su DJF, valuta le finestre dell'anno `d.year-1`,
-            `d.year` e `d.year+1`, restituendo la prima finestra che contiene `d`.
-
-        Complessità:
-            O(1) (al più 12 verifiche: 3 anni × 4 stagioni).
-
-        Edge cases:
-            - Date su 1 Dicembre o ultimo giorno di Febbraio mappano correttamente su WINTER (emisfero nord).
-            - In emisfero sud lo shift stagionale è correttamente ruotato.
-
-        Fallback:
-            In caso (teoricamente impossibile) nessuna finestra contenga `d`,
-            viene restituita `Seasons.SUMMER` per evitare bias verso il riscaldamento.
+            Seasons: stagione corrispondente.
         """
-        # Check windows around the date's year to safely span DJF boundaries
+        d = d or date.today()
+        # Considera anno precedente/corrente/successivo per coprire DJF
         for y in (d.year - 1, d.year, d.year + 1):
-            wins = (self.with_year(y)).windows().values()
-            for w in wins:
+            for w in self.with_year(y).windows().values():
                 if w.contains(d):
                     return w.season
-        # Fallback should be unreachable; pick SUMMER to avoid heating bias
+        # Non dovrebbe accadere
+        _LOGGER.warning("SeasonCalendar: date %s not in any window (unexpected).", d)
         return Seasons.SUMMER
 
     # ---- internals -----------------------------------------------------------
     @staticmethod
     def _eom(y: int, m: int) -> int:
-        """
-        End-Of-Month: ultimo giorno del mese `m` per l'anno `y`.
-
-        Args:
-            y: Anno (es. 2025).
-            m: Mese (1..12).
-
-        Returns:
-            int: Giorno finale del mese (28..31), corretto anche per anni bisestili (Feb=29).
-
-        Complessità:
-            O(1).
-
-        Dipendenze:
-            Usa `calendar.monthrange(y, m)`.
-        """
+        """Ultimo giorno del mese `m` per l'anno `y` (gestisce anni bisestili)."""
         return calendar.monthrange(y, m)[1]
 
     @classmethod
     def _north_windows(cls, year: int) -> Dict[Seasons, "SeasonCalendar.SeasonWindow"]:
-        """
-        Costruisce le finestre stagionali per l'emisfero nord nell'anno logico dato.
-
-        Args:
-            year: Anno logico (in cui termina l'inverno a Febbraio).
-
-        Returns:
-            Dict[Seasons, SeasonCalendar.SeasonWindow]: mapping stagione → finestra.
-
-        Definizioni:
-            WINTER:  1 Dec (year-1) .. last Feb (year)
-            SPRING:  1 Mar (year)   .. 31 May (year)
-            SUMMER:  1 Jun (year)   .. 31 Aug (year)
-            AUTUMN:  1 Sep (year)   .. 30 Nov (year)
-
-        Complessità:
-            O(1).
-        """
+        """Finestre stagionali per emisfero nord (anno logico `year`)."""
         winter = cls.SeasonWindow(
-            Seasons.WINTER,
-            date(year - 1, 12, 1),
-            date(year, 2, cls._eom(year, 2)),
+            Seasons.WINTER, date(year - 1, 12, 1), date(year, 2, cls._eom(year, 2))
         )
         spring = cls.SeasonWindow(Seasons.SPRING, date(year, 3, 1), date(year, 5, 31))
         summer = cls.SeasonWindow(Seasons.SUMMER, date(year, 6, 1), date(year, 8, 31))
@@ -295,28 +154,9 @@ class SeasonCalendar:
 
     @classmethod
     def _south_windows(cls, year: int) -> Dict[Seasons, "SeasonCalendar.SeasonWindow"]:
-        """
-        Costruisce le finestre stagionali per l'emisfero sud nell'anno logico dato.
-
-        Args:
-            year: Anno logico (in cui termina l'estate a Febbraio).
-
-        Returns:
-            Dict[Seasons, SeasonCalendar.SeasonWindow]: mapping stagione → finestra.
-
-        Definizioni:
-            SUMMER:  1 Dec (year-1) .. last Feb (year)
-            AUTUMN:  1 Mar (year)   .. 31 May (year)
-            WINTER:  1 Jun (year)   .. 31 Aug (year)
-            SPRING:  1 Sep (year)   .. 30 Nov (year)
-
-        Complessità:
-            O(1).
-        """
+        """Finestre stagionali per emisfero sud (anno logico `year`)."""
         summer = cls.SeasonWindow(
-            Seasons.SUMMER,
-            date(year - 1, 12, 1),
-            date(year, 2, cls._eom(year, 2)),
+            Seasons.SUMMER, date(year - 1, 12, 1), date(year, 2, cls._eom(year, 2))
         )
         autumn = cls.SeasonWindow(Seasons.AUTUMN, date(year, 3, 1), date(year, 5, 31))
         winter = cls.SeasonWindow(Seasons.WINTER, date(year, 6, 1), date(year, 8, 31))
@@ -331,8 +171,12 @@ class SeasonCalendar:
 
 @dataclass(slots=True, frozen=True)
 class _ScoreParams:
-    # peso decrescente per i giorni più lontani (0 => niente decadimento)
-    day_decay: float = 0.10
+    """
+    Parametri di scoring:
+    - day_decay/half-life sono gestiti internamente con decadimento esponenziale.
+    - boost gaussiano sul prior al centro della finestra stagionale.
+    - sigma per RBF di scarto dalla climatologia (°C).
+    """
     # boost gaussiano sul prior in prossimità del "cuore" della stagione
     boost_sigma: float = 0.20
     boost_amp: float = 0.20
@@ -344,13 +188,20 @@ class _ScoreParams:
 class WeatherSeasonDetector:
     """
     Rilevamento stagione basato su:
-      - prior da calendario (DJF/MAM/JJA/SON)
-      - anomalia storica recente (T media e dew point)
-      - climatologia stagionale (anno precedente)
+      1) Prior da calendario (DJF/MAM/JJA/SON) con boost gaussiano sul cuore stagione.
+      2) Storico recente (T media e dew point) con medie **pesate esponenzialmente**.
+      3) Climatologia stagionale (medie anno precedente per ciascuna stagione).
 
-    NOTE:
-    - Nessun uso del forecast qui (solo storico). Il provider forecast resta
-      iniettato per possibili strategie future, ma non è usato in questo detector.
+    Flusso:
+      - Costruisce il prior (calendario).
+      - Calcola medie pesate su N giorni recenti (default 21).
+      - Estrae climatologia stagionale sull'anno precedente.
+      - Scoring per stagione con RBF (distanza di T/DP da climatologia).
+      - Combina prior ⊙ storico, seleziona best e confidenza (margine best-second).
+
+    Note:
+      - `weatherForecast` è opzionale e attualmente non usato (estensioni future).
+      - Le unità attese per T e dew sono °C: normalizzare a monte nei provider.
     """
 
     def __init__(
@@ -361,17 +212,41 @@ class WeatherSeasonDetector:
         history_days: int = 21,
         params: Optional[_ScoreParams] = None,
         provider_id: str = "historical",
-        weatherForecast: Optional[WeatherForecastProvider] = None,  # opzionale, non usato
+        weatherForecast: Optional[WeatherForecastProvider] = None,  # non usato
+        last_available_offset_days: int = 2,
     ) -> None:
+        """
+        Args:
+            weatherHistorical: provider storico (deve esporre `daily_range` o `daily`).
+            calendar: istanza di SeasonCalendar (emisfero/anno baseline).
+            history_days: giorni di storico da pesare (min 7).
+            params: parametri di scoring.
+            provider_id: id diagnostico del provider.
+            weatherForecast: opzionale (non usato).
+            last_available_offset_days: quanti giorni sottrarre a "oggi" per la data
+                                        storica massima disponibile (es. provider con T-48h).
+        """
         self._calendar = calendar
         self._weather_historical = weatherHistorical
-        self._weather_forecast = weatherForecast  # tenuto per future estensioni
+        self._weather_forecast = weatherForecast
         self._history_days = max(7, int(history_days))
         self._p = params or _ScoreParams()
         self._provider_id = provider_id
+        self._last_offset = max(0, int(last_available_offset_days))
 
     # ------------------------------- API -------------------------------------
-    async def detect(self, target_date: Optional[date] = None) -> Any:
+    async def detect(self, target_date: Optional[date] = None) -> SeasonState:
+        """
+        Esegue la detection per `target_date` (default: oggi).
+
+        Returns:
+            SeasonState (se disponibile) o dict equivalente con:
+              - season: Seasons
+              - confidence: float
+              - scores: Dict[str, float]
+              - baseline: Seasons
+              - details: diagnostica estesa
+        """
         today = target_date or date.today()
 
         # 1) prior da calendario (+ boost gaussiano sul cuore stagione)
@@ -380,6 +255,7 @@ class WeatherSeasonDetector:
 
         # 2) storico recente → medie pesate
         start_hist = date.fromordinal(today.toordinal() - (self._history_days - 1))
+        log_debug(_LOGGER, "Fetching history from %s to %s", start_hist, today)
         hist_recent = await self._fetch_history_range(start=start_hist, end=today)
         mean_t, mean_dew = self._weighted_recent_means(hist_recent)
 
@@ -410,33 +286,40 @@ class WeatherSeasonDetector:
             "combined": {s.value: v for s, v in combined.items()},
             "recent_mean_t": mean_t,
             "recent_mean_dew": mean_dew,
-            "climatology_t": {s.value: clim[s].get("tavg") for s in (Seasons.WINTER, Seasons.SPRING, Seasons.SUMMER, Seasons.AUTUMN)},
-            "climatology_dew": {s.value: clim[s].get("dew") for s in (Seasons.WINTER, Seasons.SPRING, Seasons.SUMMER, Seasons.AUTUMN)},
-            "ordered": [(s.value, sc) for s, sc in ordered],
+            "climatology_t": {s.value: clim[s].get("tavg") for s in _SEASON_ORDER},
+            "climatology_dew": {s.value: clim[s].get("dew") for s in _SEASON_ORDER},
+            "ordered": [{s.value : sc} for s, sc in ordered],
+            "confidence": confidence,
             "method": "calendar_prior + historical_anomaly",
         }
 
-        return self._build_state(
-            season=season,
-            confidence=confidence,
-            scores={s.value: v for s, v in combined.items()},
+        # log_debug(_LOGGER, "Season detected %s (%s) with confidence %s using %s ", season.value, today, confidence, self._provider_id)
+                  
+        state: SeasonState = self._build_state(
+            today=today,
             baseline=baseline,
-            details=details,
+            selected=season,
+            scores=combined,      # NOTE: chiavi = Seasons, NON s.value
         )
+
+        # Opzione A: restituisci solo l'oggetto tipizzato + diagnostics a parte
+        log_debug(_LOGGER, "\n%s", details)
+
+        return state
 
     # ---------------------------- internals ----------------------------------
     def _build_prior(
         self, cal: SeasonCalendar, d: date, baseline: Seasons
     ) -> Dict[Seasons, float]:
+        """Costruisce il prior da calendario con boost gaussiano al centro finestra."""
+
         def _adjacent(s: Seasons) -> Tuple[Seasons, Seasons]:
-            order = (Seasons.WINTER, Seasons.SPRING, Seasons.SUMMER, Seasons.AUTUMN)
-            i = order.index(s)
-            return (order[(i - 1) % 4], order[(i + 1) % 4])
+            i = _SEASON_ORDER.index(s)
+            return (_SEASON_ORDER[(i - 1) % 4], _SEASON_ORDER[(i + 1) % 4])
 
         def _opposite(s: Seasons) -> Seasons:
-            order = (Seasons.WINTER, Seasons.SPRING, Seasons.SUMMER, Seasons.AUTUMN)
-            i = order.index(s)
-            return order[(i + 2) % 4]
+            i = _SEASON_ORDER.index(s)
+            return _SEASON_ORDER[(i + 2) % 4]
 
         base_w, adj_w, opp_w = 0.55, 0.20, 0.05
         s_adj_l, s_adj_r = _adjacent(baseline)
@@ -455,6 +338,7 @@ class WeatherSeasonDetector:
 
     @staticmethod
     def _relative_pos_in_window(win: SeasonCalendar.SeasonWindow, d: date) -> float:
+        """Posizione relativa 0..1 della data `d` nella finestra stagionale `win`."""
         span = (win.end - win.start).days or 1
         pos = max(0, min(span, (d - win.start).days))
         return pos / span
@@ -463,44 +347,52 @@ class WeatherSeasonDetector:
         """
         Recupera lo storico preferendo l'API canonica `daily_range(start, end)`.
         Accetta sia Forecast HA-like (con 'datetime') che record custom.
+
+        - Clampa `end` a (oggi - last_available_offset_days).
+        - Se `start > end` dopo il clamping, ritorna [].
+        - Fallback a `daily(d)` se non disponibile `daily_range`.
         """
         p = self._weather_historical
 
-        # Calcola "oggi" nella timezone di Home Assistant e la massima data disponibile
         today = dt_util.now().date()
-        last_available = today - timedelta(days=2)
+        last_available = today - timedelta(days=self._last_offset)
 
-        # Clamp della end se in futuro o negli ultimi 2 giorni non ancora disponibili
         if end > last_available:
             _LOGGER.debug(
-                "Clamping end date from %s to last available %s (today=%s, -2d).",
-                end, last_available, today
+                "Clamping end date from %s to last available %s (today=%s, -%dd).",
+                end, last_available, today, self._last_offset
             )
             end = last_available
 
+        if start > end:
+            _LOGGER.debug("History window empty after clamping: %s > %s", start, end)
+            return []
+
         _LOGGER.debug("_fetch_history_range start %s - end %s", start, end)
+
         # 1) API canonica async
         if hasattr(p, "daily_range"):
             try:
-                res = await p.daily_range(start, end)  # type: ignore[misc]
+                try:
+                    res = await p.daily_range(start, end)  # type: ignore[misc]
+                except TypeError:
+                    res = await p.daily_range(start=start, end=end)  # type: ignore[misc]
                 return list(res or [])
-            except TypeError:
-                # firma con kwargs
-                res = await p.daily_range(start=start, end=end)  # type: ignore[misc]
-                return list(res or [])
+            except Exception as e:
+                _LOGGER.warning("history daily_range(%s..%s) failed: %s", start, end, e)
 
         # 2) API per-giorno: `daily(d)`
+        rows: List[Mapping[str, Any]] = []
         if hasattr(p, "daily"):
-            rows: List[Mapping[str, Any]] = []
-            d = start
-            while d <= end:
+            d_ = start
+            while d_ <= end:
                 try:
-                    r = await p.daily(d)  # type: ignore[misc]
+                    r = await p.daily(d_)  # type: ignore[misc]
                     if isinstance(r, Mapping):
                         rows.append(r)
                 except Exception as e:
-                    _LOGGER.debug("history daily(%s) failed: %s", d, e)
-                d += timedelta(days=1)
+                    _LOGGER.debug("history daily(%s) failed: %s", d_, e)
+                d_ += timedelta(days=1)
             return rows
 
         _LOGGER.warning("WeatherSeasonDetector: provider storico senza API note; ritorno []")
@@ -510,50 +402,22 @@ class WeatherSeasonDetector:
         self, series: List[Mapping[str, Any]]
     ) -> Tuple[Optional[float], Optional[float]]:
         """
-        Media pesata (decrescente) di T media e dew point sugli ultimi N giorni.
-        Supporta chiavi: 'date' | 'day' | 'time' | 'datetime' (ISO o datetime).
+        Media pesata **esponenziale** di T media (tavg) e dew point sugli ultimi N giorni.
+        Supporta chiavi data: 'date' | 'day' | 'time' | 'datetime' (ISO o datetime).
         """
-        def _date_of(item: Mapping[str, Any]) -> Optional[date]:
-            d_ = item.get("date") or item.get("day") or item.get("time") or item.get("datetime")
-            if isinstance(d_, date):
-                return d_
-            if isinstance(d_, datetime):
-                return dt_util.as_local(d_).date()
-            if isinstance(d_, str):
-                # prova ISO con timezone
-                dtp = dt_util.parse_datetime(d_)
-                if isinstance(dtp, datetime):
-                    return dt_util.as_local(dtp).date()
-                # fallback YYYY-MM-DD
-                try:
-                    y, m, dd = map(int, d_.split("-"))
-                    return date(y, m, dd)
-                except Exception:
-                    return None
-            return None
-
-        def _tavg(item: Mapping[str, Any]) -> Optional[float]:
-            tmax = item.get("temperature") or item.get("tmax")
-            tmin = item.get("templow") or item.get("tmin")
-            if isinstance(tmax, (int, float)) and isinstance(tmin, (int, float)):
-                return (float(tmax) + float(tmin)) / 2.0
-            if isinstance(tmax, (int, float)):
-                return float(tmax)
-            return None
-
-        def _dew(item: Mapping[str, Any]) -> Optional[float]:
-            dp = item.get("dewpoint") or item.get("dew_point")
-            return float(dp) if isinstance(dp, (int, float)) else None
-
-        rows = [r for r in series if _date_of(r) is not None]
-        rows.sort(key=lambda r: cast(date, _date_of(r)))  # type: ignore[arg-type]
+        rows = [r for r in series if self._parse_date(r) is not None]
+        rows.sort(key=lambda r: cast(date, self._parse_date(r)))  # type: ignore[arg-type]
         if not rows:
             return None, None
 
         rows = rows[-self._history_days :]
         n = len(rows)
-        # i=0 sarà il più recente (inverto dopo)
-        weights = [max(0.0, 1.0 - i * self._p.day_decay) for i in range(n)]
+
+        # i=0 sarà il più recente (iteriamo su reversed(rows))
+        # Half-life ~ history_days/2: i campioni a ~N/2 giorni valgono ~50%
+        half_life = max(1.0, self._history_days / 2.0)
+        lam = math.log(2.0) / half_life
+        weights = [math.exp(-lam * i) for i in range(n)]
         ws = sum(weights) or 1.0
         weights = [w / ws for w in weights]
 
@@ -561,8 +425,8 @@ class WeatherSeasonDetector:
         d_vals: List[float] = []
         for i, r in enumerate(reversed(rows)):  # i=0 = più recente
             w = weights[i]
-            t = _tavg(r)
-            d = _dew(r)
+            t = self._tavg_of(r)
+            d = self._dew_of(r)
             if isinstance(t, (int, float)):
                 t_vals.append(w * float(t))
             if isinstance(d, (int, float)):
@@ -586,48 +450,18 @@ class WeatherSeasonDetector:
 
         series = await self._fetch_history_range(start, end)
 
-        by_season_t: Dict[Seasons, List[float]] = {s: [] for s in (Seasons.WINTER, Seasons.SPRING, Seasons.SUMMER, Seasons.AUTUMN)}
-        by_season_d: Dict[Seasons, List[float]] = {s: [] for s in (Seasons.WINTER, Seasons.SPRING, Seasons.SUMMER, Seasons.AUTUMN)}
-
-        def _date_of(item: Mapping[str, Any]) -> Optional[date]:
-            d_ = item.get("date") or item.get("day") or item.get("time") or item.get("datetime")
-            if isinstance(d_, date):
-                return d_
-            if isinstance(d_, datetime):
-                return dt_util.as_local(d_).date()
-            if isinstance(d_, str):
-                dtp = dt_util.parse_datetime(d_)
-                if isinstance(dtp, datetime):
-                    return dt_util.as_local(dtp).date()
-                try:
-                    y, m, dd = map(int, d_.split("-"))
-                    return date(y, m, dd)
-                except Exception:
-                    return None
-            return None
-
-        def _tavg(item: Mapping[str, Any]) -> Optional[float]:
-            tmax = item.get("temperature") or item.get("tmax")
-            tmin = item.get("templow") or item.get("tmin")
-            if isinstance(tmax, (int, float)) and isinstance(tmin, (int, float)):
-                return (float(tmax) + float(tmin)) / 2.0
-            if isinstance(tmax, (int, float)):
-                return float(tmax)
-            return None
-
-        def _dew(item: Mapping[str, Any]) -> Optional[float]:
-            dp = item.get("dewpoint") or item.get("dew_point")
-            return float(dp) if isinstance(dp, (int, float)) else None
+        by_season_t: Dict[Seasons, List[float]] = {s: [] for s in _SEASON_ORDER}
+        by_season_d: Dict[Seasons, List[float]] = {s: [] for s in _SEASON_ORDER}
 
         for row in series:
-            d = _date_of(row)
+            d = self._parse_date(row)
             if not d:
                 continue
             s = cal_prev.season_for(d)
-            t = _tavg(row)
+            t = self._tavg_of(row)
             if isinstance(t, (int, float)):
                 by_season_t[s].append(float(t))
-            dp = _dew(row)
+            dp = self._dew_of(row)
             if isinstance(dp, (int, float)):
                 by_season_d[s].append(float(dp))
 
@@ -636,7 +470,7 @@ class WeatherSeasonDetector:
 
         return {
             s: {"tavg": _mean(by_season_t[s]), "dew": _mean(by_season_d[s])}
-            for s in (Seasons.WINTER, Seasons.SPRING, Seasons.SUMMER, Seasons.AUTUMN)
+            for s in _SEASON_ORDER
         }
 
     def _scores_from_climatology(
@@ -647,7 +481,13 @@ class WeatherSeasonDetector:
         sigma_t: float,
         sigma_d: float,
     ) -> Dict[Seasons, float]:
-        scores: Dict[Seasons, float] = {s: 0.0 for s in (Seasons.WINTER, Seasons.SPRING, Seasons.SUMMER, Seasons.AUTUMN)}
+        """
+        Calcola punteggi per stagione sommando due RBF:
+          - exp(- (ΔT)^2 / (2 σ_t^2))
+          - exp(- (ΔDP)^2 / (2 σ_d^2))
+        Normalizza i punteggi in [0..1] con somma = 1.
+        """
+        scores: Dict[Seasons, float] = {s: 0.0 for s in _SEASON_ORDER}
         if mean_t is None and mean_dew is None:
             return scores
 
@@ -668,6 +508,10 @@ class WeatherSeasonDetector:
         prior: Dict[Seasons, float],
         hist: Dict[Seasons, float],
     ) -> Dict[Seasons, float]:
+        """
+        Combina prior e storico con prodotto punto-punto e normalizza.
+        Se `hist` è vuoto o nullo, ritorna `prior`.
+        """
         if not hist or sum(hist.values()) == 0:
             return prior
         combined = {s: prior.get(s, 0.0) * hist.get(s, 0.0) for s in prior.keys()}
@@ -677,6 +521,7 @@ class WeatherSeasonDetector:
     def _decide(
         scores: Dict[Seasons, float]
     ) -> Tuple[Seasons, float, List[Tuple[Seasons, float]]]:
+        """Ordina, sceglie il migliore e calcola la confidenza (best - second)."""
         ordered = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
         best_s, best_v = ordered[0]
         second_v = ordered[1][1] if len(ordered) > 1 else 0.0
@@ -686,6 +531,7 @@ class WeatherSeasonDetector:
     # --------------------------- utilità locali -------------------------------
     @staticmethod
     def _gauss(x: float, mu: float, sigma: float) -> float:
+        """Valore di una gaussiana univariata N(mu, sigma^2) in x (non normalizzata)."""
         if sigma <= 0:
             return 0.0
         z = (x - mu) / sigma
@@ -693,18 +539,96 @@ class WeatherSeasonDetector:
 
     @staticmethod
     def _normalize(d: Dict[Seasons, float]) -> Dict[Seasons, float]:
+        """Normalizza i valori ≥0 in modo che sommino a 1 (uniforme se somma ≤ 0)."""
         s = sum(max(0.0, v) for v in d.values())
         if s <= 0:
             n = len(d) or 1
             return {k: 1.0 / n for k in d.keys()}
         return {k: max(0.0, v) / s for k, v in d.items()}
 
-    def _build_state(self, **kwargs: Any) -> Any:
-        """Costruisce SeasonState se disponibile, altrimenti un dict compatibile."""
-        try:
-            return SeasonState(**kwargs)  # type: ignore[arg-type]
-        except Exception as e:
-            _LOGGER.debug("WeatherSeasonDetector: fallback a dict per SeasonState: %s", e)
-            return kwargs
+    def _season_window_metrics(
+        self,
+        win: SeasonCalendar.SeasonWindow,
+        today: date,
+    ) -> tuple[int, int, int]:
+        """Ritorna (days, passed, remaining) per finestra inclusiva [start, end]."""
+        days = (win.end - win.start).days + 1  # inclusiva
+        if today <= win.start:
+            passed = 0
+            remaining = days - 1
+        elif today >= win.end:
+            passed = days - 1
+            remaining = 0
+        else:
+            passed = (today - win.start).days
+            remaining = (win.end - today).days
+        return days, passed, remaining
 
 
+    def _build_state(
+        self,
+        *,
+        today: date,
+        baseline: Seasons,
+        selected: Seasons,
+        scores: Mapping[Seasons, float],
+    ) -> SeasonState:
+        """Costruisce un SeasonState coerente con il modello."""
+        # Finestra della stagione baseline (di calendario)
+        win = self._calendar.windows()[baseline]
+        days, passed, remaining = self._season_window_metrics(win, today)
+
+        # Gli score sono già normalizzati in [0..1]; le probabilità sono in percentuale.
+        season_scores = dict(scores)
+        season_probabilities = {s: v * 100.0 for s, v in scores.items()}
+
+        return SeasonState(
+            season=baseline,                       # baseline di calendario
+            days=days,
+            passed=passed,
+            remaining=remaining,
+            overridden=selected,                   # stagione "scelta"
+            weather_anomaly=(baseline != selected),
+            season_scores=season_scores,
+            season_probabilities=season_probabilities,
+        )
+
+
+    # --------------------------- helper DRY -----------------------------------
+    def _parse_date(self, item: Mapping[str, Any]) -> Optional[date]:
+        """
+        Estrae una `date` da un record supportando più chiavi e formati:
+        - 'date' | 'day' | 'time' | 'datetime'
+        - str ISO con timezone → convertita in locale
+        - fallback 'YYYY-MM-DD'
+        """
+        d_ = item.get("date") or item.get("day") or item.get("time") or item.get("datetime")
+        if isinstance(d_, date):
+            return d_
+        if isinstance(d_, datetime):
+            return dt_util.as_local(d_).date()
+        if isinstance(d_, str):
+            dtp = dt_util.parse_datetime(d_)
+            if isinstance(dtp, datetime):
+                return dt_util.as_local(dtp).date()
+            try:
+                y, m, dd = map(int, d_.split("-"))
+                return date(y, m, dd)
+            except Exception:
+                return None
+        return None
+
+    def _tavg_of(self, item: Mapping[str, Any]) -> Optional[float]:
+        """Ritorna T media come (tmax+tmin)/2 quando possibile; altrimenti tmax."""
+        tmax = item.get("temp_max") or item.get("tmax")
+        tmin = item.get("temp_min") or item.get("tmin")
+        if isinstance(tmax, (int, float)) and isinstance(tmin, (int, float)):
+            return (float(tmax) + float(tmin)) / 2.0
+        if isinstance(tmax, (int, float)):
+            return float(tmax)
+        return None
+
+    def _dew_of(self, item: Mapping[str, Any]) -> Optional[float]:
+        """Ritorna dew point (°C) se presente in 'dewpoint' o 'dew_point'."""
+        dp = item.get("dew_point") or item.get("dew_point")
+        return float(dp) if isinstance(dp, (int, float)) else None

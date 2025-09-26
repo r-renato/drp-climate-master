@@ -38,9 +38,12 @@ from urllib.parse import urlparse
 
 from homeassistant.core import HomeAssistant
 from homeassistant.components.weather import Forecast
+from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from ..helpers.cache import PersistentCache
+from ..helpers.logger import log_debug
+
+from ..helpers.cache import PersistentForecastCache
 
 from ..const import DOMAIN
 
@@ -48,34 +51,6 @@ from ..helpers.utils import as_float, ratio_or_percent_to_int
 from .provider import WeatherHistoricalProvider
 
 _LOGGER = logging.getLogger(__name__)
-
-# =============================================================================
-# Shared model & interfaces
-# =============================================================================
-class _TTLCache:
-    """Simple per-key TTL cache for Forecast."""
-    __slots__ = ("_ttl", "_data")
-
-    def __init__(self, ttl_seconds: int) -> None:
-        self._ttl = ttl_seconds
-        self._data: dict[date, Tuple[float, Forecast]] = {}
-
-    def get(self, key: date) -> Optional[Forecast]:
-        entry = self._data.get(key)
-        if not entry:
-            return None
-        exp_ts, val = entry
-        if time.time() > exp_ts:
-            # expired
-            self._data.pop(key, None)
-            return None
-        return val
-
-    def set(self, key: date, value: Forecast) -> None:
-        self._data[key] = (time.time() + self._ttl, value)
-
-    def clear(self) -> None:
-        self._data.clear()
 
 # -----------------------------------------------------------------------------
 # Config & Opzioni
@@ -151,7 +126,6 @@ class PirateWeatherConfig:
         if self.base_url.endswith("/"):
             object.__setattr__(self, "base_url", self.base_url.rstrip("/"))
 
-
 @dataclass(slots=True, frozen=True)
 class ProviderOptions:
     """
@@ -221,8 +195,6 @@ class ProviderOptions:
         """Numero totale di tentativi eseguiti in presenza di retry (prime try + retries)."""
         return self.retries + 1
 
-
-
 # -----------------------------------------------------------------------------
 # Utility locali (backoff, iter, sort, single-flight)
 # -----------------------------------------------------------------------------
@@ -231,14 +203,6 @@ def _jittered_backoff(base: float, factor: float, attempt: int, jitter_frac: flo
     delay = base * (factor ** attempt)
     jitter = delay * jitter_frac
     return max(0.0, delay + random.uniform(-jitter, jitter))
-
-
-def _date_iter(start: date, end: date):
-    d = start
-    while d <= end:
-        yield d
-        d += timedelta(days=1)
-
 
 def _forecast_sort_key(fc: Forecast) -> float:
     dtv = fc.get("datetime")
@@ -302,21 +266,59 @@ class _SingleFlight:
 # -----------------------------------------------------------------------------
 # --- CLIENT: una sola responsabilità -> fetch di UN giorno -------------------
 
+# Assunti: esistono queste utility nel tuo progetto
+# - _LOGGER: logging.Logger
+# - _jittered_backoff(base: float, factor: float, attempt: int, jitter: float) -> float
+# - as_float(x) -> Optional[float]
+# - ratio_or_percent_to_int(x: Optional[float]) -> Optional[int]
+# - Forecast: TypedDict | alias a dict[str, Any]
+# - ProviderOptions con campi: http_timeout_s, retries, backoff_base, backoff_factor, jitter
+# - PirateWeatherConfig con: api_key, lat, lon, units, base_url (opzionale)
+
 class PirateWeatherDayClient:
     """
-    Client HTTP per Pirate Weather Time Machine, responsabile SOLO della
-    richiesta di un singolo giorno (retry + backoff + parsing). Non gestisce
-    cache, cooldown, single-flight o orchestrazione di range.
+    Client HTTP per Pirate Weather Time Machine, responsabile della richiesta di un singolo giorno.
+
+    Responsabilità:
+    - Nessuna cache/single-flight/orchestrazione intervalli (demandata ad altri layer).
+    - Retry con backoff+jitter su 429/5xx e su errori di rete/timeout.
+    - Parsing del blocco `daily.data[0]` in un Forecast normalizzato.
+
+    Contratti:
+    - `Forecast` include SEMPRE la chiave "datetime" (ISO di inizio giorno locale).
+    - Unità:
+        * temperature: in unità fornite da Pirate Weather (coerenti con `units`)
+        * humidity: percentuale intera [0..100]
+        * wind_speed/wind_gust_speed: coerenti con `units`
+        * precipitation_accumulation: se derivato da `precipIntensity` ed `units == "us"`,
+          il valore viene convertito in mm (SI) per coerenza interna (documenta nel tuo progetto).
+    - Ritorno: (forecast|None, retry_after_s|None). Se None, `retry_after_s` può suggerire un cooldown esterno.
     """
+
+    NON_RETRYABLE_STATUSES = {400, 401, 403, 404, 405, 406, 409, 410, 411, 413, 414, 415, 422, 501, 505}
+    RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
 
     def __init__(self, cfg: PirateWeatherConfig, opts: ProviderOptions | None = None) -> None:
         self._cfg = cfg
         self._opts = opts or ProviderOptions()
-        self._aiohttp = importlib.import_module("aiohttp")
+        self._aiohttp = None  # import lazy
         self._session: Any = None
 
+    async def __aenter__(self) -> "PirateWeatherDayClient":
+        await self.ensure_session()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        await self.close_session()
+
     async def ensure_session(self) -> None:
-        if self._session is None:
+        if self._aiohttp is None:
+            try:
+                self._aiohttp = importlib.import_module("aiohttp")
+            except Exception as e:
+                raise RuntimeError("aiohttp non disponibile: installa la dipendenza") from e
+
+        if self._session is None or getattr(self._session, "closed", False):
             timeout = getattr(self._aiohttp, "ClientTimeout")(total=self._opts.http_timeout_s)
             self._session = getattr(self._aiohttp, "ClientSession")(timeout=timeout)
 
@@ -328,22 +330,54 @@ class PirateWeatherDayClient:
                 self._session = None
 
     def _build_url(self, when: datetime) -> str:
-        base = self._cfg.base_url or "https://api.pirateweather.net/forecast"
-        iso = when.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+        # Default coerente col Time Machine
+        base = self._cfg.base_url or "https://timemachine.pirateweather.net/forecast"
+        iso = when.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
         return f"{base}/{self._cfg.api_key}/{self._cfg.lat},{self._cfg.lon},{iso}"
 
     @staticmethod
-    def _parse_daily_payload(d: date, payload: dict[str, Any]) -> Optional[Forecast]:
+    def _local_day_iso(d: date) -> str:
+        if dt_util is not None:
+            return dt_util.start_of_local_day(datetime(d.year, d.month, d.day)).isoformat()
+        # Fallback: mezzanotte naive (specifica nelle tue API se serve TZ)
+        return datetime(d.year, d.month, d.day).isoformat()
+
+    @staticmethod
+    def _parse_retry_after(value: Optional[str]) -> float:
+        """Supporta sia secondi (es. '120') che HTTP-date. Ritorna 0.0 se non parsabile."""
+        if not value:
+            return 0.0
+        # 1) Tentativo numerico
+        try:
+            sec = float(value)
+            if sec >= 0:
+                return sec
+        except Exception:
+            pass
+        # 2) HTTP-date
+        try:
+            from email.utils import parsedate_to_datetime
+            dt = parsedate_to_datetime(value)
+            if dt is not None:
+                now = datetime.now(timezone.utc)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                delta = (dt - now).total_seconds()
+                return max(0.0, delta)
+        except Exception:
+            pass
+        return 0.0
+
+    @staticmethod
+    def _parse_daily_payload(d: date, payload: dict[str, Any], *, units: str) -> Optional[Forecast]:
         daily = payload.get("daily")
         if not isinstance(daily, dict):
             return None
         data = daily.get("data")
-        if not isinstance(data, list) or not data:
-            return None
-        di = data[0]
-        if not isinstance(di, dict):
+        if not isinstance(data, list) or not data or not isinstance(data[0], dict):
             return None
 
+        di = data[0]
         tmin = as_float(di.get("temperatureMin"))
         tmax = as_float(di.get("temperatureMax"))
         dp   = as_float(di.get("dewPoint"))
@@ -352,13 +386,18 @@ class PirateWeatherDayClient:
         wg   = as_float(di.get("windGust"))
         uvi  = as_float(di.get("uvIndex"))
         pacc = as_float(di.get("precipAccumulation"))
+
         if pacc is None:
+            # Deriva da intensità * 24 (unità native del provider)
             pi = as_float(di.get("precipIntensity"))
-            pacc = pi * 24.0 if pi is not None else None
+            if pi is not None:
+                # se units = 'us', intensità è in inches/hour -> converti a mm/day
+                if units == "us":
+                    pacc = pi * 24.0 * 25.4  # in/day -> mm/day
+                else:
+                    pacc = pi * 24.0  # mm/day
 
-        dt_local = dt_util.start_of_local_day(datetime(d.year, d.month, d.day)).isoformat()
-
-        base: dict[str, Any] = {"datetime": dt_local}
+        base: dict[str, Any] = {"datetime": PirateWeatherDayClient._local_day_iso(d)}
         optional = {
             "temp_max": float(tmax) if tmax is not None else None,
             "temp_min": float(tmin) if tmin is not None else None,
@@ -374,9 +413,15 @@ class PirateWeatherDayClient:
 
     async def fetch_day(self, d: date) -> Tuple[Optional[Forecast], Optional[float]]:
         """
-        Esegue la chiamata HTTP con retry/backoff. Ritorna:
-          (forecast | None, retry_after_s | None)
-        Se fallisce, retry_after_s (se presente) suggerisce il backoff negativo.
+        Esegue la chiamata HTTP con retry/backoff.
+
+        Returns:
+            (forecast | None, retry_after_s | None)
+
+        Note:
+            - Non ritenta su status non recuperabili (es. 401/403/404...).
+            - In caso di `200` ma payload invalido, ritenta (dati non pronti o day fuori copertura).
+            - `retry_after_s` deriva da header `Retry-After` (secondi o HTTP-date), solo se non c'è un risultato.
         """
         await self.ensure_session()
         assert self._session is not None
@@ -384,71 +429,81 @@ class PirateWeatherDayClient:
         start_t = time.perf_counter()
         res: Optional[Forecast] = None
         last_retry_after_s: float = 0.0
+        status: int | str = "n/a"
+        url: str = ""
 
         for attempt in range(self._opts.retries + 1):
             try:
                 when = datetime(d.year, d.month, d.day, 12, 0, 0, tzinfo=timezone.utc)
                 url = self._build_url(when)
-                params = {"units": self._cfg.units, "exclude": "hourly,minutely,alerts,flags,currently"}
+                params = {
+                    "units": self._cfg.units,
+                    "exclude": "hourly,minutely,alerts,flags,currently",
+                    # "lang": "it",  # opzionale, se ti serve
+                }
+                headers = {"Accept": "application/json"}
 
-                async with self._session.get(url, params=params) as resp:
+                async with self._session.get(url, params=params, headers=headers) as resp:
                     status = resp.status
                     if status == 200:
                         payload: dict[str, Any] = await resp.json()
-                        res = self._parse_daily_payload(d, payload)
+                        res = self._parse_daily_payload(d, payload, units=self._cfg.units)
                         if res is not None:
+                            break  # successo
+                        # altrimenti ritenta (payload mancante/strano)
+                    elif status in self.RETRYABLE_STATUSES:
+                        ra = self._parse_retry_after(resp.headers.get("Retry-After"))
+                        last_retry_after_s = max(last_retry_after_s, ra)
+                        # ultimo tentativo? solo logga, non dorme oltre
+                        if attempt >= self._opts.retries:
+                            _LOGGER.warning("PW daily(%s) %s; Retry-After=%.1fs url=%s", d, status, ra, url)
                             break
-                    elif status in (429, 500, 502, 503, 504):
-                        retry_after = 0.0
-                        try:
-                            ra = resp.headers.get("Retry-After")
-                            if ra:
-                                retry_after = float(ra)
-                        except Exception:
-                            retry_after = 0.0
-                        last_retry_after_s = max(last_retry_after_s, retry_after)
-
-                        if attempt >= self._opts.retries:
-                            _LOGGER.warning("PW HTTP daily(%s) failed with %s; retry-after=%s", d, status, retry_after)
-                        await asyncio.sleep(max(
-                            retry_after,
-                            _jittered_backoff(self._opts.backoff_base, self._opts.backoff_factor, attempt, self._opts.jitter)
-                        ))
+                        sleep_s = max(ra, _jittered_backoff(self._opts.backoff_base,
+                                                            self._opts.backoff_factor,
+                                                            attempt, self._opts.jitter))
+                        _LOGGER.debug("PW daily(%s) retryable %s attempt=%d sleep=%.2fs", d, status, attempt, sleep_s)
+                        await asyncio.sleep(sleep_s)
                         continue
+                    elif status in self.NON_RETRYABLE_STATUSES:
+                        _LOGGER.warning("PW daily(%s) non-retryable status %s url=%s", d, status, url)
+                        break
                     else:
+                        # status sconosciuti -> un retry conservativo
                         if attempt >= self._opts.retries:
-                            _LOGGER.warning("PW HTTP daily(%s) unexpected status %s", d, status)
-                        await asyncio.sleep(_jittered_backoff(
-                            self._opts.backoff_base, self._opts.backoff_factor, attempt, self._opts.jitter
-                        ))
+                            _LOGGER.warning("PW daily(%s) unexpected status %s url=%s", d, status, url)
+                            break
+                        sleep_s = _jittered_backoff(self._opts.backoff_base,
+                                                    self._opts.backoff_factor,
+                                                    attempt, self._opts.jitter)
+                        _LOGGER.debug("PW daily(%s) unexpected %s attempt=%d sleep=%.2fs", d, status, attempt, sleep_s)
+                        await asyncio.sleep(sleep_s)
                         continue
 
-            except TimeoutError as e:
+            except asyncio.TimeoutError as e:
                 status = "timeout"
                 if attempt >= self._opts.retries:
-                    _LOGGER.warning("PW HTTP daily(%s) timeout: %r %s", d, e, url)
-                await asyncio.sleep(_jittered_backoff(
-                    self._opts.backoff_base, self._opts.backoff_factor, attempt, self._opts.jitter
-                ))
+                    _LOGGER.warning("PW daily(%s) timeout: %r url=%s", d, e, url)
+                    break
+                sleep_s = _jittered_backoff(self._opts.backoff_base, self._opts.backoff_factor, attempt, self._opts.jitter)
+                _LOGGER.debug("PW daily(%s) timeout attempt=%d sleep=%.2fs", d, attempt, sleep_s)
+                await asyncio.sleep(sleep_s)
             except Exception as e:
+                # errori di rete/decoding ecc. (include aiohttp.ClientError se presente)
                 if attempt >= self._opts.retries:
-                    _LOGGER.warning(
-                        "PW HTTP daily(%s) exception (%s): %r",
-                        d, e.__class__.__name__, e,
-                        exc_info=True,   # <— stacktrace completo
-                    )
-                await asyncio.sleep(_jittered_backoff(
-                    self._opts.backoff_base, self._opts.backoff_factor, attempt, self._opts.jitter
-                ))
+                    status = getattr(e, "__class__", type(e)).__name__
+                    _LOGGER.warning("PW daily(%s) exception (%s): %r url=%s", d, status, e, url, exc_info=True)
+                    break
+                sleep_s = _jittered_backoff(self._opts.backoff_base, self._opts.backoff_factor, attempt, self._opts.jitter)
+                _LOGGER.debug("PW daily(%s) exception %s attempt=%d sleep=%.2fs", d, type(e).__name__, attempt, sleep_s)
+                await asyncio.sleep(sleep_s)
 
         _LOGGER.debug(
-            "PW HTTP daily (%s): %s %.1f ms (ok=%s) %s",
-            d,
-            status, 
-            (time.perf_counter() - start_t) * 1000,
-            bool(res), url if not bool(res) else ""
+            "PW daily(%s): status=%s elapsed=%.1fms ok=%s %s",
+            d, status, (time.perf_counter() - start_t) * 1000, bool(res), ("" if res else url),
         )
+
         return res, (last_retry_after_s if res is None and last_retry_after_s > 0 else None)
+
 
 
 # --- MANAGER: orchestrazione cache/range/single-flight/concurrency -----------
@@ -457,10 +512,16 @@ class PirateWeatherHistorical(WeatherHistoricalProvider):
     """
     Orchestratore storico con policy di cache/persistenza e gestione range.
     Delega la singola chiamata HTTP a PirateWeatherDayClient.
+
+    Policy finestra 48h:
+      - Non tenta mai il fetch di un giorno D prima di (fine D locale + 48h).
+      - Dopo QUALSIASI tentativo (ok/ko), il prossimo tentativo per quel giorno
+        è consentito solo nella prossima finestra ≥ 48h dopo.
+      - Retry-After del provider viene rispettato ma non anticipa la finestra (si usa max()).
     """
 
     _MUTABLE_DAYS = 1          # giorni che possono cambiare (oggi; metti 2 per includere ieri)
-    # _MIN_REFRESH_HOURS = 6     # frequenza minima di refresh per giorni mutabili
+    _WINDOW_HOURS = 48         # ampiezza finestra per tentativi per-day
 
     def __init__(self, hass: HomeAssistant, cfg: PirateWeatherConfig, opts: ProviderOptions | None = None) -> None:
         self._hass = hass
@@ -475,25 +536,12 @@ class PirateWeatherHistorical(WeatherHistoricalProvider):
         self._sf = _SingleFlight()
 
         # Metadati in RAM
-        # self._last_refresh: Dict[str, float] = {}  # day ISO -> last ts
         self._neg_cache: Dict[str, float] = {}     # day ISO -> retry-allowed-after ts
 
         # Store key robusta (dipende anche da units/base_url)
         key = self._make_store_key(cfg)
-        self._data = PersistentCache(hass, key=key, version=1, max_days=1095)  # 3 anni
-
-    # ---------- context ----------
-    async def __aexit__(self, exc_type, exc, tb) -> None:
-        try:
-            await self._data.async_save()
-        finally:
-            await self._close_session()
-
-    # ---------- helpers chiave store ----------
-    @staticmethod
-    def _make_store_key(cfg: PirateWeatherConfig) -> str:
-        import hashlib
-        return f"{DOMAIN}.pirateweather.historical.{cfg.units}.{cfg.lat:.4f}.{cfg.lon:.4f}"
+        self._data = PersistentForecastCache(hass, key=key, version=1, max_days=1095)  # 3 anni
+        self._store: Store = Store(hass, version=1, key=f"{key}.meta") 
 
     # ---------- context ----------
     async def __aenter__(self) -> "PirateWeatherHistorical":
@@ -501,8 +549,26 @@ class PirateWeatherHistorical(WeatherHistoricalProvider):
         await self._data.async_load()
         return self
 
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        try:
+            await self._data.async_save()
+        finally:
+            await self._close_session()
+
     async def _close_session(self) -> None:
         await self._client.close_session()
+
+    # ---------- helpers chiave store ----------
+    @staticmethod
+    def _date_iter(start: date, end: date):
+        d = start
+        while d <= end:
+            yield d
+            d += timedelta(days=1)
+
+    @staticmethod
+    def _make_store_key(cfg: PirateWeatherConfig) -> str:
+        return f"{DOMAIN}.pirateweather.historical.{cfg.units}.{cfg.lat:.4f}.{cfg.lon:.4f}"
 
     # ---------- policy mutabilità/refresh & negative cache ----------
     def _is_mutable_day(self, d: date) -> bool:
@@ -511,19 +577,15 @@ class PirateWeatherHistorical(WeatherHistoricalProvider):
         delta = (today - d).days
         return 0 <= delta < self._MUTABLE_DAYS
 
-
     def _should_refresh_now(self, d: date, fetched_at: Optional[float] = None) -> bool:
         """
-        Per i giorni mutabili, consenti al massimo un refresh per giornata locale.
-        - Se mai fetchato → True
-        - Se last_fetch è di un giorno locale precedente all'ora attuale → True
-        - Altrimenti → False
+        (Legacy) Per i giorni mutabili, consenti al massimo un refresh per giornata locale.
+        NB: la policy finestra da 48h prevale comunque e blocca i tentativi fuori finestra.
         """
         if not self._is_mutable_day(d):
             return False
         if not fetched_at:
             return True
-
         last_local_day = dt_util.as_local(datetime.fromtimestamp(fetched_at)).date()
         today_local = dt_util.now().date()
         return last_local_day < today_local
@@ -535,49 +597,257 @@ class PirateWeatherHistorical(WeatherHistoricalProvider):
         delay = seconds if seconds is not None else minutes * 60
         self._neg_cache[d.isoformat()] = time.time() + max(1, delay)
 
+    # ---------- calcolo finestre 48h ----------
+    def _end_of_local_day(self, d: date) -> datetime:
+        start = dt_util.start_of_local_day(datetime(d.year, d.month, d.day))
+        return start + timedelta(days=1)
+
+    def _ready_at_local(self, d: date) -> datetime:
+        # Prima possibilità di interrogare quel giorno:
+        # fine del giorno (D+1 alle 00:00 locali) + 48h
+        return self._end_of_local_day(d) + timedelta(hours=self._WINDOW_HOURS)
+
+    def _too_early_to_fetch(
+        self,
+        d: date,
+        *,
+        last_attempt_ts: float | None = None,
+        retry_after_s: float | None = None,
+    ) -> tuple[bool, float]:
+        """
+        Applica i vincoli:
+          - ready_at (fine giorno + 48h)
+          - last_attempt + 48h (finestra successiva)
+          - now + Retry-After (se presente)
+        Ritorna (too_early, seconds_until_ok).
+        """
+        now = dt_util.now()
+        gates = [self._ready_at_local(d)]
+
+        if last_attempt_ts and last_attempt_ts > 0:
+            gates.append(datetime.fromtimestamp(last_attempt_ts, tz=now.tzinfo) + timedelta(hours=self._WINDOW_HOURS))
+
+        if retry_after_s and retry_after_s > 0:
+            gates.append(now + timedelta(seconds=retry_after_s))
+
+        allow_at = max(gates)
+        delta = (allow_at - now).total_seconds()
+        if delta > 0:
+            return True, delta
+        return False, 0.0
+
+    def _neg_until_next_window(
+        self,
+        d: date,
+        *,
+        last_attempt_ts: float | None = None,
+        retry_after_s: float | None = None,
+    ) -> None:
+        """
+        Imposta la negative-cache fino al prossimo momento consentito.
+        Se già in finestra (too_early=False) forza comunque una pausa di 48h.
+        """
+        too_early, wait_s = self._too_early_to_fetch(
+            d, last_attempt_ts=last_attempt_ts, retry_after_s=retry_after_s
+        )
+        if not too_early:
+            wait_s = max(wait_s, self._WINDOW_HOURS * 3600)
+        self._neg_backoff(d, seconds=int(max(1, wait_s)))
+
+    async def _select_misses_and_collect_cached(
+        self, days: list[date]
+    ) -> tuple[list[Forecast], list[date]]:
+        """Prima passata: usa cache e determina i giorni candidati 'misses' per il giro corrente."""
+        results: list[Forecast] = []
+        misses: list[date] = []
+
+        for d in days:
+            fc = await self._data.async_get(d)
+            # Giorni non mutabili: usa solo cache (se c'è) e non aggiornare
+            if fc and not self._is_mutable_day(d):
+                results.append(fc)
+                continue
+
+            # Negative-cache attiva → non interrogare ora
+            if not self._neg_can_query(d):
+                if fc:
+                    results.append(fc)
+                continue
+
+            # Gate 48h dalla fine del giorno (+ eventuale last attempt / Retry-After)
+            too_early, wait_s = self._too_early_to_fetch(d)
+            if too_early:
+                self._neg_backoff(d, seconds=int(wait_s))
+                if fc:
+                    results.append(fc)
+                continue
+
+            # Candidato per questo giro
+            misses.append(d)
+
+        return results, misses
+
+
     # ---------- public API ----------
-    async def daily(self, day: date) -> Optional[Forecast]:
-        """Cache-first; per i giorni mutabili consente al massimo un fetch per giornata locale.
-        In caso di failure usa cache esistente e attiva negative-cache in base a Retry-After."""
-        await self._data.async_load()
+    # async def daily(self, day: date) -> Optional[Forecast]:
+    #     """
+    #     Cache-first con policy a finestra 48h.
+    #     - Giorni non mutabili: mai refresh (solo cache persistente).
+    #     - Gate: non tenta prima di (fine giorno + 48h).
+    #     - Dopo QUALSIASI tentativo, chiude la finestra per ≥48h (o Retry-After se maggiore).
+    #     """
+    #     await self._data.async_load()
 
-        fc = await self._data.async_get(day)
-        fetched_at = float(fc.get("_meta_fetched_at", 0.0)) if fc else 0.0
+    #     fc = await self._data.async_get(day)
+    #     # fetched_at mantenuto per legacy/telemetria; la policy finestra prevale
+    #     fetched_at = float(fc.get("_meta_fetched_at", 0.0)) if fc else 0.0  # noqa: F841
 
-        # Giorni non mutabili: mai refresh
-        if fc and not self._is_mutable_day(day):
-            return fc
+    #     # Giorni non mutabili: mai refresh
+    #     if fc and not self._is_mutable_day(day):
+    #         return fc
 
-        # Se già fetchato oggi (giorno locale), non rifare HTTP
-        if fc and not self._should_refresh_now(day, fetched_at):
-            return fc
+    #     # Negative-cache attiva → non interrogare ora
+    #     if not self._neg_can_query(day):
+    #         return fc
 
-        # Negative-cache attiva → non interrogare ora
-        if not self._neg_can_query(day):
-            return fc
+    #     # Gate 48h dalla fine del giorno + (eventuale) ultimo tentativo
+    #     too_early, wait_s = self._too_early_to_fetch(day)
+    #     if too_early:
+    #         self._neg_backoff(day, seconds=int(wait_s))
+    #         return fc
 
+    #     async def _do():
+    #         async with self._sem:
+    #             return await self._client.fetch_day(day)
+
+    #     try:
+    #         fetched, retry_after = await self._sf.run(day, _do)  # dedup per-day
+    #     except asyncio.CancelledError:
+    #         return fc
+
+    #     # Qualsiasi esito → imposta neg-cache fino alla prossima finestra
+    #     now_ts = time.time()
+    #     self._neg_until_next_window(day, last_attempt_ts=now_ts, retry_after_s=retry_after)
+
+    #     if fetched:
+    #         annotated = cast(Forecast, {**fetched, "_meta_fetched_at": now_ts, "_meta_day": day.isoformat()})
+    #         await self._data.async_put(day, annotated)
+    #         return annotated
+
+    #     # Fallita: mantieni cache esistente (se c'è)
+    #     return fc
+
+    async def _fetch_day_with_dedup(
+        self, day: date
+    ) -> tuple[Optional[Forecast], Optional[float]]:
+        """Esegue un singolo fetch (dedup + semaforo). Ritorna (forecast, retry_after)."""
         async def _do():
             async with self._sem:
                 return await self._client.fetch_day(day)
 
         try:
-            fetched, retry_after = await self._sf.run(day, _do)  # dedup per-day
+            return await self._sf.run(day, _do)
         except asyncio.CancelledError:
-            return fc
+            return None, None
+        
+    async def _run_chunk(
+        self,
+        chunk: list[date],
+        timeout_s: float
+    ) -> list[tuple[date, Optional[Forecast], Optional[float]]]:
+        """
+        Esegue in parallelo il fetch di un 'chunk' di giorni con timeout per-batch.
 
-        if fetched:
-            now_ts = time.time()
-            annotated = cast(Forecast, {**fetched, "_meta_fetched_at": now_ts, "_meta_day": day.isoformat()})
-            await self._data.async_put(day, annotated)
-            return annotated
+        IN
+        ---
+        - chunk: list[date]
+            Giorni da processare nel batch corrente. L’ordine non è rilevante.
+            (La concorrenza effettiva resta limitata dal Semaphore dentro _fetch_day_with_dedup.)
 
-        # Fallita: attiva negative-cache (rispetta Retry-After se presente)
-        if retry_after is not None:
-            self._neg_backoff(day, seconds=int(retry_after))
-        else:
-            self._neg_backoff(day)
+        - timeout_s: float
+            Timeout massimo (secondi) per l’intero batch. Se scade, i task rimanenti vengono cancellati.
 
-        return fc
+        OUT
+        ----
+        - list[tuple[date, Optional[Forecast], Optional[float]]]
+            Una tupla per **ogni task completato entro il timeout**:
+            ( day, fetched_or_none, retry_after_seconds_or_none )
+            Dove:
+            * fetched_or_none: risultato del provider (non annotato) oppure None in caso di errore.
+            * retry_after_seconds_or_none: finestra 'Retry-After' suggerita dal provider, altrimenti None.
+
+            NOTE:
+            * Non c’è una tupla per i task cancellati perché pendenti allo scadere del timeout.
+            * L’ordine delle tuple NON è garantito (dipende dall’esito di asyncio.wait).
+
+        Eccezioni
+        ---------
+        - Propaga `asyncio.CancelledError` se la cancellazione avviene a livello di batch
+        (i task creati vengono prima cancellati).
+        """
+        # Edge case: timeout non positivo → nessun tentativo effettivo
+        if timeout_s <= 0 or not chunk:
+            return []
+
+        # Crea i task (la concorrenza reale è limitata internamente da _fetch_day_with_dedup)
+        tasks: dict[asyncio.Task, date] = {
+            asyncio.create_task(self._fetch_day_with_dedup(d)): d for d in chunk
+        }
+
+        try:
+            done, pending = await asyncio.wait(tasks.keys(), timeout=timeout_s)
+        except asyncio.CancelledError:
+            # Se il batch viene cancellato, cancella tutti i task e propaga
+            for t in tasks:
+                t.cancel()
+            # Draina comunque per evitare warning
+            await asyncio.gather(*tasks.keys(), return_exceptions=True)
+            raise
+
+        # Cancella i pendenti allo scadere del timeout e draina eccezioni/Cancelled
+        for p in pending:
+            p.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        out: list[tuple[date, Optional[Forecast], Optional[float]]] = []
+        for t in done:
+            d = tasks[t]
+            try:
+                fetched, rafter = t.result()  # type: ignore[assignment]
+                out.append((d, fetched, rafter))
+            except Exception:
+                # Errore nel singolo task → nessun dato nuovo per quel giorno
+                out.append((d, None, None))
+
+        return out
+
+    async def _finalize_attempt(
+        self,
+        d: date,
+        fetched: Optional[Forecast],
+        retry_after_s: Optional[float],
+    ) -> tuple[Optional[Forecast], Optional[Forecast]]:
+        """
+        Applica subito la chiusura della finestra (neg-cache) per il giorno d,
+        annota il forecast se presente e calcola l'eventuale fallback da cache.
+        Ritorna (annotated_or_none, fallback_or_none).
+        """
+        now_ts = time.time()
+        self._neg_until_next_window(d, last_attempt_ts=now_ts, retry_after_s=retry_after_s)
+
+        if isinstance(fetched, dict) and "datetime" in fetched:
+            annotated: Forecast = cast(Forecast, {**fetched, "_meta_fetched_at": now_ts, "_meta_day": d.isoformat()})
+            return annotated, None
+
+        # Nessun dato nuovo → prova il fallback dalla cache persistente
+        fallback = await self._data.async_get(d)
+        return None, fallback
+    
+    async def _persist_new_items(self, items: list[tuple[date, Forecast]]) -> None:
+        """Salva solo i forecast nuovi/aggiornati."""
+        for d, fc in items:
+            await self._data.async_put(d, fc)
 
     async def daily_range(
         self,
@@ -589,29 +859,118 @@ class PirateWeatherHistorical(WeatherHistoricalProvider):
         inter_batch_sleep: float = 0.25,
         total_budget_s: float = 25.0,
     ) -> List[Forecast]:
-        """Recupera [start..end] privilegiando cache e limitando la rete con cooldown/backoff.
+        """
+        Recupera [start..end] privilegiando cache e limitando la rete con policy a finestra 48h.
         - Giorni non mutabili: mai refresh (solo cache persistente).
-        - Giorni mutabili: al massimo un fetch HTTP per giornata locale.
-        - Resilienza: single-flight per giorno, Semaphore, negative-cache, budget per batch."""
-        await self._client.ensure_session()
+        - Giorni “eleggibili” per il giro: solo se dopo (fine giorno + 48h) e non in neg-cache.
+        - Dopo QUALSIASI tentativo su un giorno, chiudi la finestra di quel giorno per ≥48h.
+        """
+        # await self._client.ensure_session()
+        await self._data.async_load()
+        meta = await self._store.async_load() or {}
+
+        if len(meta) == 0 or meta.get("last_fetch") != dt_util.now().date().isoformat():
+            meta = {"last_fetch": date.today()}
+            await self._store.async_save(meta)
+
+        log_debug(_LOGGER, "Window [%s..%s] start now", start, end)
+
+        days = [d for d in self._date_iter(start, end)]
+        results, misses = await self._select_misses_and_collect_cached(days)
+
+        # log_debug(_LOGGER, "%s %s", meta.get("last_fetch"), meta.get("last_fetch") == dt_util.now().date().isoformat())
+        if not misses or meta.get("last_fetch") == dt_util.now().date().isoformat():
+            results.sort(key=_forecast_sort_key)
+            log_debug(_LOGGER, "Window [%s..%s] end: returning %d results (misses=%s)", start, end, len(results), len(misses))
+            return results
+
+        t0 = time.perf_counter()
+        new_items: list[tuple[date, Forecast]] = []
+
+        try:
+            for i in range(0, len(misses), batch_size):
+                # Budget residuo globale
+                elapsed = time.perf_counter() - t0
+                remaining_budget = total_budget_s - elapsed
+                if remaining_budget <= 0:
+                    _LOGGER.warning(
+                        "PW daily_range: budget esaurito (%.1fs), ritorno %d/%d",
+                        total_budget_s, len(results), len(days)
+                    )
+                    break
+
+                chunk = misses[i : i + batch_size]
+                chunk_timeout = min(per_batch_timeout, max(0.0, remaining_budget))
+
+                # Esecuzione chunk (parallelo) con timeout per-batch
+                batch_out = await self._run_chunk(chunk, chunk_timeout)
+
+                # Post-processing risultati chunk
+                for d, fetched, rafter in batch_out:
+                    annotated, fallback = await self._finalize_attempt(d, fetched, rafter)
+
+                    if annotated is not None:
+                        results.append(annotated)
+                        new_items.append((d, annotated))
+                    elif fallback is not None:
+                        results.append(fallback)
+                    # altrimenti: nessun dato per quel giorno
+
+                # Respiro tra i chunk (se richiesto)
+                if inter_batch_sleep > 0:
+                    await asyncio.sleep(inter_batch_sleep)
+
+        except asyncio.CancelledError:
+            _LOGGER.warning(
+                "PW daily_range cancellata (elapsed=%.1fs, parziali=%d/%d)",
+                time.perf_counter() - t0, len(results), len(days)
+            )
+        finally:
+            # salva solo ciò che è nuovo/aggiornato
+            await self._persist_new_items(new_items)
+
+        results.sort(key=_forecast_sort_key)
+        _LOGGER.debug(
+            "PW daily_range [%s..%s] end: returning %d results (misses=%d), elapsed=%.1f ms",
+            start, end, len(results), len(misses), (time.perf_counter() - t0) * 1000.0
+        )
+        return results
+
+
+
+
+    async def daily_range_old(
+        self,
+        start: date,
+        end: date,
+        *,
+        batch_size: int = 5,
+        per_batch_timeout: float = 10.0,
+        inter_batch_sleep: float = 0.25,
+        total_budget_s: float = 25.0,
+    ) -> List[Forecast]:
+        """
+        Recupera [start..end] privilegiando cache e limitando la rete con policy a finestra 48h.
+        - Giorni non mutabili: mai refresh (solo cache persistente).
+        - Giorni “eleggibili” per il giro: solo se dopo (fine giorno + 48h) e non in neg-cache.
+        - Dopo QUALSIASI tentativo su un giorno, chiudi la finestra di quel giorno per ≥48h.
+        """
+        # await self._client.ensure_session()
         await self._data.async_load()
 
-        days = [d for d in _date_iter(start, end)]
+        log_debug(_LOGGER, "Window [%s..%s] start now", start, end)
+
+        days = [d for d in self._date_iter(start, end)] 
         results: List[Forecast] = []
         misses: List[date] = []
 
-        # 1) Prima passata: usa cache e decidi cosa davvero manca/va aggiornato
+        # 1) Prima passata: usa cache e decidi cosa davvero manca/va provato in questo giro
         for d in days:
             fc = await self._data.async_get(d)
-            fetched_at = float(fc.get("_meta_fetched_at", 0.0)) if fc else 0.0
+            fetched_at = float(fc.get("_meta_fetched_at", 0.0)) if fc else 0.0  # noqa: F841
 
             # non mutabile → prendi cache e non aggiornare
             if fc and not self._is_mutable_day(d):
-                results.append(fc)
-                continue
-
-            # mutabile ma già fetchato oggi → tieni cache
-            if fc and not self._should_refresh_now(d, fetched_at):
                 results.append(fc)
                 continue
 
@@ -621,7 +980,15 @@ class PirateWeatherHistorical(WeatherHistoricalProvider):
                     results.append(fc)
                 continue
 
-            # va fetchato
+            # Gate 48h dalla fine del giorno (+ last attempt/Retry-After se presenti)
+            too_early, wait_s = self._too_early_to_fetch(d)
+            if too_early:
+                self._neg_backoff(d, seconds=int(wait_s))
+                if fc:
+                    results.append(fc)
+                continue
+
+            # è un candidato per questo giro
             misses.append(d)
 
         if not misses:
@@ -645,8 +1012,10 @@ class PirateWeatherHistorical(WeatherHistoricalProvider):
             for i in range(0, len(misses), batch_size):
                 elapsed = time.perf_counter() - t0
                 if total_budget_s - elapsed <= 0:
-                    _LOGGER.warning("PW daily_range: budget esaurito (%.1fs), ritorno %d/%d",
-                                    total_budget_s, len(results), len(days))
+                    _LOGGER.warning(
+                        "PW daily_range: budget esaurito (%.1fs), ritorno %d/%d",
+                        total_budget_s, len(results), len(days)
+                    )
                     break
 
                 chunk = misses[i: i + batch_size]
@@ -686,8 +1055,11 @@ class PirateWeatherHistorical(WeatherHistoricalProvider):
                     return out
 
                 for d, fc, rafter in await _batch():
+                    # CHIUDI SUBITO LA FINESTRA PER QUESTO GIORNO, indipendentemente dall’esito
+                    now_ts = time.time()
+                    self._neg_until_next_window(d, last_attempt_ts=now_ts, retry_after_s=rafter)
+
                     if isinstance(fc, dict) and "datetime" in fc:
-                        now_ts = time.time()
                         annotated = cast(Forecast, {**fc, "_meta_fetched_at": now_ts, "_meta_day": d.isoformat()})
                         results.append(annotated)
                         new_items.append((d, annotated))
@@ -696,17 +1068,14 @@ class PirateWeatherHistorical(WeatherHistoricalProvider):
                         fallback = await self._data.async_get(d)
                         if fallback:
                             results.append(fallback)
-                        # attiva neg-cache (rispetta Retry-After se presente)
-                        if rafter is not None:
-                            self._neg_backoff(d, seconds=int(rafter))
-                        else:
-                            self._neg_backoff(d)
 
                 await asyncio.sleep(inter_batch_sleep)
 
         except asyncio.CancelledError:
-            _LOGGER.warning("PW daily_range cancellata (elapsed=%.1fs, parziali=%d/%d)",
-                            time.perf_counter() - t0, len(results), len(days))
+            _LOGGER.warning(
+                "PW daily_range cancellata (elapsed=%.1fs, parziali=%d/%d)",
+                time.perf_counter() - t0, len(results), len(days)
+            )
         finally:
             # salva solo ciò che è nuovo/aggiornato
             for d, fc in new_items:
@@ -715,6 +1084,10 @@ class PirateWeatherHistorical(WeatherHistoricalProvider):
             # await self._data.async_save()
 
         results.sort(key=_forecast_sort_key)
+        _LOGGER.debug(
+            "PW daily_range [%s..%s] end: returning %d results (misses=%d), elapsed=%.1f ms",
+            start, end, len(results), len(misses), (time.perf_counter() - t0) * 1000.0
+        )
         return results
 
 

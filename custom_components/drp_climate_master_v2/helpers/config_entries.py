@@ -24,6 +24,8 @@ from ..domain.models import (
     CompressorManagementConfig,
     CoolingManagementConfig,
     DevicesConfig,
+    ForecastDataConfig,
+    HistoricalDataConfig,
     ModeConfig,
     PlantCapabilities,
     RadiantConfig,
@@ -38,7 +40,8 @@ from ..domain.models import (
     VMCAlarmsConfig,
     VMCConfig,
     VMCRequestsConfig,
-    VMCSensorsConfig
+    VMCSensorsConfig,
+    WeatherConfig
 )
 from ..const import (
     CONF_ADJUSTABLE_SUPPLY_UNIT,
@@ -58,14 +61,19 @@ from ..const import (
     CONF_FORCE_COOLING,
     CONF_FORCE_FREE_COOLING,
     CONF_FORCE_HEATING,
+    CONF_FORECAST_DATA,
     CONF_H_SETPOINT,
     CONF_HEATING_DT_SETPOINT,
     CONF_HEATING_T_SETPOINT,
+    CONF_HISTORICAL_DATA,
     CONF_HOME_WINDOWS_STATE,
     CONF_INDOOR,
+    CONF_LATITUDE,
+    CONF_LONGITUDE,
     CONF_MODE,
     CONF_MQ,
     CONF_POWER,
+    CONF_PROVIDER,
     CONF_RADIANT,
     CONF_REQUESTS,
     CONF_SCENARIOS,
@@ -75,10 +83,13 @@ from ..const import (
     CONF_T_SETPOINT,
     CONF_TCOLLECTOR,
     CONF_THREE_POINT_MIXING_VALVE,
+    CONF_TOKEN,
+    CONF_UNITS,
     CONF_VENT_RECIRCULATION,
     CONF_VMC,
     CONF_WEATHER,
     DEFAULT_TEMP_UNIT,
+    DEFAULT_UNITS,
     OPT_UPDATE_INTERVAL_S,
 )
 
@@ -269,15 +280,29 @@ def build_runtime_config(entry: ConfigEntry) -> RuntimeConfig:
             alarms=VMCAlarmsConfig(**v[CONF_ALARMS]),
         )
 
+    w = entry.data[CONF_WEATHER]
+    _LOGGER.debug("build_runtime_config %s", entry.data)
+
+    fd = ForecastDataConfig(provider=str(w[CONF_FORECAST_DATA][CONF_PROVIDER]).strip())
+    h = w[CONF_HISTORICAL_DATA]
+    hd = HistoricalDataConfig(
+        provider=str(h[CONF_PROVIDER]).strip().lower(),
+        token=str(h[CONF_TOKEN]).strip(),
+        latitude=float(h[CONF_LATITUDE]),
+        longitude=float(h[CONF_LONGITUDE]),
+    )
+
     climate = ClimateConfig(
         name=entry.data["climate_name"],
         unique_id=entry.data["climate_unique_id"],
+        units=entry.data.get(CONF_UNITS, DEFAULT_UNITS),
         areas=areas,
         devices=DevicesConfig(
             supply_units=supply_units, radiant=radiant, vmc=vmc
         ),
         home_windows_state=entry.data[CONF_HOME_WINDOWS_STATE],
-        weather=entry.data[CONF_WEATHER],
+        # weather=entry.data[CONF_WEATHER],
+        weather=WeatherConfig(forecast_data=fd, historical_data=hd),
         scenarios=ScenariosConfig(**climate_cfg[CONF_SCENARIOS]),
         temperature_unit=climate_cfg.get(CONF_TEMPERATURE_UNIT, DEFAULT_TEMP_UNIT),
     )

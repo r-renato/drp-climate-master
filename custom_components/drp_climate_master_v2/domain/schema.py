@@ -47,6 +47,7 @@ from ..const import (
     CONF_FORCE_COOLING,
     CONF_FORCE_FREE_COOLING,
     CONF_FORCE_HEATING,
+    CONF_FORECAST_DATA,
     CONF_H_AMBIENT,
     CONF_H_SETPOINT,
     CONF_HEATING,
@@ -89,6 +90,7 @@ from ..const import (
     CONF_TEMPERATURE,
     CONF_THREE_POINT_MIXING_VALVE,
     CONF_TOKEN,
+    CONF_UNITS,
     CONF_VACATION,
     CONF_VALUE,
     CONF_VENT_RECIRCULATION,
@@ -99,6 +101,7 @@ from ..const import (
     CONF_WINTER,
     DEFAULT_CLIMATE_NAME,
     DEFAULT_TEMP_UNIT,
+    DEFAULT_UNITS,
     DOMAIN
 )
 
@@ -262,7 +265,11 @@ DEVICES_SCHEMA = vol.Schema(
 
 WEATHER_SCHEMA = vol.Schema(
     {
-        vol.Required(CONF_PROVIDER): cv.string,
+        vol.Required(CONF_FORECAST_DATA) : vol.Schema(
+            {
+                vol.Required(CONF_PROVIDER): cv.string,
+            }
+        ),
         vol.Required(CONF_HISTORICAL_DATA) : vol.Schema(
             {
                 vol.Required(CONF_PROVIDER): cv.string,
@@ -284,6 +291,7 @@ BASE_CLIMATE_SCHEMA = vol.Schema(
         vol.Optional(CONF_MIN_TEMP, default=5): vol.Coerce(float),
         vol.Optional(CONF_STEP, default=0.5): vol.Coerce(float),
         vol.Optional(CONF_TEMPERATURE_UNIT, default=DEFAULT_TEMP_UNIT): cv.string,
+        vol.Optional(CONF_UNITS, default=DEFAULT_UNITS): cv.string,
 
         vol.Required(CONF_AREAS): vol.All(
             cv.ensure_list, [vol.All(AREAS_SCHEMA)]

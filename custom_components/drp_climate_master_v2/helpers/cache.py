@@ -61,7 +61,7 @@ from homeassistant.helpers.debounce import Debouncer
 
 _LOGGER = logging.getLogger(__name__)
 
-class PersistentCache:
+class PersistentForecastCache:
     """
     Cache persistente su `.storage/<key>` con stato in RAM e salvataggio debounced;
     può operare anche in modalità **solo memoria** (`persist=False`).

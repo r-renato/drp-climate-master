@@ -72,6 +72,7 @@ SUPERVISOR: Final = "supervisor"
 
 DEFAULT_CLIMATE_NAME: Final[str] = "(DRP) Home Master"
 DEFAULT_TEMP_UNIT: Final[str] = "°C"
+DEFAULT_UNITS: Final[str] = "si"  # "metric" | "imperial"
 
 OPT_UPDATE_INTERVAL_S: Final[int] = 60
 
@@ -87,6 +88,7 @@ NAME_AREA_HOME: Final[str] = "Home Current"
 # ======================================================
 
 # Sezioni top-level del blocco climate
+CONF_UNITS : Final[str] = "units"
 CONF_CLIMATE: Final[str] = "climate"
 CONF_AREAS: Final[str] = "areas"
 CONF_DEVICES: Final[str] = "devices"
@@ -201,6 +203,7 @@ CONF_ALARM: Final[str] = "alarm"
 
 # Weather
 CONF_PROVIDER: Final[str] = "provider"
+CONF_FORECAST_DATA: Final[str] = "forecast_data"
 CONF_HISTORICAL_DATA: Final[str] = "historical_data"
 CONF_TOKEN: Final[str] = "token"
 CONF_LATITUDE: Final[str] = "latitude"

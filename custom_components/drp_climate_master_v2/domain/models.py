@@ -148,14 +148,32 @@ class ScenariosConfig:
     vacation: str
     nobodysin: str
 
+@dataclass(frozen=True, slots=True)
+class ForecastDataConfig:
+    # Per HA: entity_id weather.* (es. "weather.home_rome")
+    provider: str
+
+@dataclass(frozen=True, slots=True)
+class HistoricalDataConfig:
+    provider: str
+    token: str
+    latitude: float
+    longitude: float
+
+@dataclass(frozen=True)
+class WeatherConfig:
+    forecast_data: ForecastDataConfig
+    historical_data: HistoricalDataConfig
+
 @dataclass(frozen=True)
 class ClimateConfig:
     name: str
     unique_id: str
+    units: str
     areas: List[AreaConfig]
     devices: DevicesConfig
     home_windows_state: str
-    weather: str
+    weather: WeatherConfig
     scenarios: ScenariosConfig
     temperature_unit: str
 
@@ -189,15 +207,15 @@ class SeasonState:
     `season_probabilities` are expected in percentage (0..100), as in v1.
     """
 
-    # Baseline (calendar) season label
-    label: Seasons
+    # Baseline (calendar) season season
+    season: Seasons
 
     # Season span metrics (inclusive window)
     days: int
     passed: int
     remaining: int
 
-    # Selected season after forecast inference (may equal label)
+    # Selected season after forecast inference (may equal season)
     overridden: Seasons
     weather_anomaly: bool
 
@@ -245,7 +263,7 @@ class SeasonState:
         return replace(
             self,
             overridden=season,
-            weather_anomaly=(self.label != season) if anomaly is None else anomaly,
+            weather_anomaly=(self.season != season) if anomaly is None else anomaly,
             season_scores=dict(scores) if scores is not None else self.season_scores,
             season_probabilities=dict(probabilities) if probabilities is not None else self.season_probabilities,
         )
@@ -257,7 +275,7 @@ class SeasonState:
     def to_dict(self) -> Dict[str, object]:
         """Serialize to a plain dict with enum values for JSON/logging."""
         return {
-            "label": self.label.value,
+            "label": self.season.value,
             "days": self.days,
             "passed": self.passed,
             "remaining": self.remaining,
@@ -270,7 +288,7 @@ class SeasonState:
 
     def __str__(self) -> str:  # pragma: no cover
         lines = [
-            f"Season label       :: {self.label.value}",
+            f"Season label       :: {self.season.value}",
             f"Total days         :: {self.days}",
             f"Days passed        :: {self.passed}",
             f"Days remaining     :: {self.remaining}",
