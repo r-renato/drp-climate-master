@@ -89,22 +89,117 @@ class ZoneSnapshot:
     act_state: Optional[bool] = None  # ultimo comando all’attuatore (on/off)
 
 
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Optional
+
+
 @dataclass(slots=True)
 class PDCSnapshot:
     """
-    Istantanea della **Pompa di Calore (PDC)** o generatore termico.
+    Istantanea degli **stati e temperature della Pompa di Calore (PDC)** e del
+    circuito tecnico associato, utile per orchestrazione (mode/mix), vincoli di
+    sicurezza e controllo avanzato (PID/MPC-lite). Tutte le temperature sono in **°C**.
+    Il timestamp **deve** essere timezone-aware (consigliato **UTC**).
 
-    Campi suggeriti (estendibili nel tempo):
-      • mode: Literal["heat","cool","dhw","off"] — modalità operativa
-      • supply_t / return_t: float — mandata/ritorno lato generatore
-      • flow_rate: Optional[float] — portata (l/min o m³/h)
-      • compressor_on: bool — stato compressore
-      • power_w: Optional[float] — potenza istantanea
-      • faults: tuple[str, ...] — codici allarmi/guasti
+    Uso tipico
+    ----------
+    - **Orchestratore**: selezione modalità (heating/cooling/DHW/defrost/standby),
+      consenso all’attuazione, logiche di pre-heating/pre-cooling.
+    - **Safety layer**: gestione min-on/min-off, controlli su ΔT, diagnosi anomalie.
+    - **Controllore/MPC**: vincoli su temperature disponibili, stima potenza,
+      penalizzazioni energetiche.
 
-    Al momento è un segnaposto documentato, pronto per essere esteso.
+    Attributi
+    ---------
+    timestamp : datetime
+        Istante di rilevazione dello snapshot (timezone-aware). Serve ad allineare
+        i cicli di controllo e a rilevare dati stantii.
+
+    pdc_fm_power_on : bool
+        Stato ON/OFF del modulo di movimentazione fluido lato PDC (es. **Flow Manager** /
+        circolatore principale / fan module del gruppo). True ⇒ circolazione attiva.
+
+    pdc_power_on : Optional[bool]
+        Stato ON/OFF della **Pompa di Calore** (compressore/centralina in marcia).
+        Può essere `None` se il dato non è disponibile (sensoristica parziale).
+
+    pdc_device_mode : Optional[int]
+        Modalità operativa **grezza** della PDC come codice numerico **vendor-specific**
+        (esempi tipici da mappare: 0=standby, 1=heating, 2=cooling, 3=dhw, 4=defrost).
+        Va **normalizzato** a valle per le logiche applicative.
+
+    pdc_wot_heat : Optional[float]
+        **Water Outlet Temperature (WOT) setpoint** lato PDC in **riscaldamento**. In molte macchine
+        è il risultato della **curva climatica** (compensazione climatica) + eventuali offset.
+
+    pdc_delta_t_heat : Optional[float]
+        **Offset/Delta** applicato al setpoint WOT in riscaldamento (boost/eco). Utile per
+        strategie temporanee o pre-heating (valore positivo ⇒ alza la mandata obiettivo).
+
+    pdc_wot_cool : Optional[float]
+        **WOT setpoint** lato PDC in **raffrescamento** (temperatura acqua fredda desiderata).
+
+    pdc_delta_t_cool : Optional[float]
+        **Offset/Delta** applicato al setpoint WOT in raffrescamento (più basso ⇒ acqua più fredda).
+
+    pdc_t_water_in_pe : Optional[float]
+        Temperatura **ingresso** acqua lato **plate/exchanger** PDC (lato impianto). Misura utile
+        per diagnosi scambi e calcolo ΔT locale sul generatore.
+
+    pdc_t_water_out_pe : Optional[float]
+        Temperatura **uscita** acqua lato **plate/exchanger** PDC (lato impianto). Con `pdc_t_water_in_pe`
+        consente di ricavare **ΔT PDC** (= out_pe − in_pe) come proxy di scambio/potenza sul generatore.
+
+    boiler_supply_temp : Optional[float]
+        **Mandata** circuito tecnico/distribuzione (post PDC/miscelazione). Serve per verificare
+        che la temperatura disponibile sia coerente con la domanda utenze (radianti/fancoil).
+
+    boiler_return_temp : Optional[float]
+        **Ritorno** circuito tecnico/distribuzione. Con la mandata fornisce **ΔT idronico** della
+        rete (proxy del carico reale lato impianto).
+
+    minutes_power_on : Optional[float]
+        Minuti consecutivi in **stato acceso** (PDC/gruppo). Usato per policy **min-on time**
+        e per individuare cicli troppo brevi.
+
+    minutes_power_off : Optional[float]
+        Minuti consecutivi in **stato spento**. Usato per policy **min-off time** e anticycling.
+
+    Note
+    ----
+    - **WOT** = *Water Outlet Temperature* (setpoint di mandata lato generatore).
+    - I codici di `pdc_device_mode` sono **fornitore-specifici**: definire una mappa di normalizzazione.
+    - Range indicativi:
+        * WOT riscaldamento: ~30–55 °C; WOT raffrescamento: ~7–20 °C
+        * ΔT idronico rete (boiler_supply − boiler_return): tip. 3–10 °C
+        * ΔT PDC (out_pe − in_pe): variabile per macchina/condizioni
+    - Validazioni consigliate: timestamp recente, temperature plausibili, coerenza
+      tra mode e setpoint (es. in cooling non impostare WOT > 25 °C).
     """
 
+    timestamp: datetime
+    pdc_fm_power_on: bool
+    pdc_power_on: Optional[bool]
+
+    pdc_device_mode: Optional[int]
+
+    pdc_wot_heat: Optional[float]
+    pdc_delta_t_heat: Optional[float]
+
+    pdc_wot_cool: Optional[float]
+    pdc_delta_t_cool: Optional[float]
+
+    pdc_t_water_in_pe: Optional[float]
+    pdc_t_water_out_pe: Optional[float]
+
+    boiler_supply_temp: Optional[float]
+    boiler_return_temp: Optional[float]
+
+    minutes_power_on: Optional[float]
+    minutes_power_off: Optional[float]
 
 @dataclass(slots=True)
 class VMCSnapshot:
