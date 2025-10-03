@@ -89,13 +89,6 @@ class ZoneSnapshot:
     act_state: Optional[bool] = None  # ultimo comando all’attuatore (on/off)
 
 
-from __future__ import annotations
-
-from dataclasses import dataclass
-from datetime import datetime
-from typing import Optional
-
-
 @dataclass(slots=True)
 class PDCSnapshot:
     """
@@ -181,19 +174,19 @@ class PDCSnapshot:
     """
 
     timestamp: datetime
-    pdc_fm_power_on: bool
-    pdc_power_on: Optional[bool]
+    fm_power_on: bool
+    power_on: Optional[bool]
 
-    pdc_device_mode: Optional[int]
+    device_mode: Optional[int]
 
-    pdc_wot_heat: Optional[float]
-    pdc_delta_t_heat: Optional[float]
+    wot_heat: Optional[float]
+    delta_t_heat: Optional[float]
 
-    pdc_wot_cool: Optional[float]
-    pdc_delta_t_cool: Optional[float]
+    wot_cool: Optional[float]
+    delta_t_cool: Optional[float]
 
-    pdc_t_water_in_pe: Optional[float]
-    pdc_t_water_out_pe: Optional[float]
+    t_water_in_pe: Optional[float]
+    t_water_out_pe: Optional[float]
 
     boiler_supply_temp: Optional[float]
     boiler_return_temp: Optional[float]
@@ -215,6 +208,42 @@ class VMCSnapshot:
 
     Al momento è un segnaposto documentato, pronto per essere esteso.
     """
+    timestamp: datetime
+    power_on: Optional[bool]
+
+    t_setpoint: Optional[float]
+    rh_setpoint: Optional[float]
+    t_dew_point_setpoint: Optional[float]
+    delta_t_dew_point_setpoint: Optional[float]
+
+    spare_setpoint: Optional[int]
+
+    act_vent_recirculation: Optional[bool]
+    act_force_heating: Optional[bool]
+    act_force_cooling: Optional[bool]
+    act_force_free_cooling: Optional[bool]
+
+    processing_mode: Optional[str]
+    compressor_management: Optional[int]
+    cooling_management: Optional[int]
+
+    request_water: Optional[bool]
+    request_dehumidification: Optional[bool]
+    request_heating: Optional[bool]
+    request_cooling: Optional[bool]
+
+    sensor_t_ambient: Optional[float]
+    sensor_h_ambient: Optional[float]
+    sensor_t_water: Optional[float]
+    sensor_t_outdoor: Optional[float]
+    sensor_power_on_night: Optional[float]
+    sensor_power_on_today: Optional[float]
+
+    alarm_high_pressure: Optional[bool]
+    alarm_dew_point: Optional[bool]
+    alarm_low_water_temp: Optional[bool]
+    alarm_high_water_temp: Optional[bool]
+    alarm_alarm: Optional[bool]
 
 
 @dataclass(slots=True)
@@ -231,6 +260,17 @@ class SupplyUnitSnapshot:
 
     Al momento è un segnaposto documentato, pronto per essere esteso.
     """
+    timestamp: datetime
+    direct_su_power_on: Optional[bool]
+    adjustable_su_power_on: Optional[bool]
+    three_point_mixing_valve: Optional[int]
+
+    sensor_boiler_temp_system_supply: Optional[float]
+    sensor_boiler_temp_system_return: Optional[float]
+    sensor_adjustable_temp_system_supply: Optional[float]
+    sensor_adjustable_temp_system_return: Optional[float]
+    sensor_direct_temp_system_supply: Optional[float]
+    sensor_direct_temp_system_return: Optional[float]
 
 
 @dataclass(slots=True)
@@ -273,7 +313,7 @@ class PlantSnapshot:
         Iteratore sui nomi delle zone (ordine di dizionario).
     """
 
-    ts: datetime
+    timestamp: datetime
     season: SeasonState
     zones: dict[str, ZoneSnapshot]
 
