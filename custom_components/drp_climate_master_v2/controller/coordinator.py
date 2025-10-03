@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import json
 from typing import Any, Optional
 
 from homeassistant.config_entries import ConfigEntry
@@ -11,7 +12,9 @@ from homeassistant.core import HomeAssistant, Event, EventStateChangedData, call
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.const import PERCENTAGE
 
-from ..domain.models import SeasonState
+from ..helpers.logger import log_debug, log_warning
+
+from ..domain.models.season import SeasonState
 
 from ..helpers.config_entries import (
     build_runtime_config,
@@ -20,7 +23,7 @@ from ..helpers.config_entries import (
 )
 from ..weather.provider import WeatherHistoricalProvider
 from ..weather.forecast_provider import WeatherForecast
-from ..weather.historical_pirateweather import PirateWeatherConfig, ProviderOptions, get_pirateweather_historical_provider
+from ..weather.historical_pirateweather import PirateWeatherConfig, get_pirateweather_historical_provider
 from ..season.detector import WeatherSeasonDetector
 
 from ..const import (
@@ -58,6 +61,7 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # _LOGGER.debug("Runtime config %s", self._runtime)
 
         eids = collect_entity_ids_for_state_changes(self._runtime)
+        log_debug(_LOGGER, "\n%s", eids)
         # Conserva l'unsubscribe per lo stop/unload
         self._unsub_state_changes = subscribe_entity_state_changes(
             self._hass, callback=self.entity_changed, entity_ids=eids
@@ -176,7 +180,7 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             }
         )
 
-        _LOGGER.debug("build_climate_sensor_defs: %d definizioni", len(defs))
+        log_debug(_LOGGER, "build_climate_sensor_defs: %d definizioni", len(defs))
         return defs
 
     # async def async_setup_slave_entities(self) -> List[Any]:
@@ -228,7 +232,7 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._entities_state[entity_id] = new_state
             # _LOGGER.debug("State changed: %s -> %s", entity_id, new_state.state)
         except Exception as ex:  # estrema difesa: non far mai esplodere il job
-            _LOGGER.debug("Ignore state change for %s (%s)", entity_id, ex)
+            log_warning(_LOGGER, "Ignore state change for %s (%s)", entity_id, ex)
 
         # NOTA: non toccare async_set_updated_data qui
         # self.async_set_updated_data({})
@@ -236,36 +240,36 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     # ---------------------- Lifecycle hooks ------------------------- #
 
-    async def _async_temp_test_weater(self) -> None:
-        lat, lon = 41.9238, 12.4125
+    # async def _async_temp_test_weater(self) -> None:
+    #     lat, lon = 41.9238, 12.4125
 
-        cfg = PirateWeatherConfig(
-            api_key="4mtCz6m3gmiEAvgjQdbB9pB6ndZFR67E",
-            lat=lat,
-            lon=lon,
-            units="si",          # °C
-            # base_url=None      # opzionale, solo per backend HTTP
-            base_url="https://timemachine.pirateweather.net/forecast",
-        )
+    #     cfg = PirateWeatherConfig(
+    #         api_key="4mtCz6m3gmiEAvgjQdbB9pB6ndZFR67E",
+    #         lat=lat,
+    #         lon=lon,
+    #         units="si",          # °C
+    #         # base_url=None      # opzionale, solo per backend HTTP
+    #         base_url="https://timemachine.pirateweather.net/forecast",
+    #     )
 
-        # Opzioni di robustezza/performance
-        opts = ProviderOptions(
-            max_concurrency=6,    # limita richieste/conversioni in parallelo
-            retries=2,            # tentativi aggiuntivi (totale = retries+1)
-            backoff_base=0.5,
-            backoff_factor=2.0,
-            jitter=0.25,
-            # ttl_seconds=6*3600,   # cache per-day (6h)
-            http_timeout_s=20,
-        )
-        # --- Creazione provider (usa libreria se installata, altrimenti HTTP) ---
-        historical_provider = get_pirateweather_historical_provider(self._hass, cfg, opts=opts)
-        weather_forecast = WeatherForecast( self._hass, "weather.home_rome", forecast_type="daily")
+    #     # Opzioni di robustezza/performance
+    #     opts = ProviderOptions(
+    #         max_concurrency=6,    # limita richieste/conversioni in parallelo
+    #         retries=2,            # tentativi aggiuntivi (totale = retries+1)
+    #         backoff_base=0.5,
+    #         backoff_factor=2.0,
+    #         jitter=0.25,
+    #         # ttl_seconds=6*3600,   # cache per-day (6h)
+    #         http_timeout_s=20,
+    #     )
+    #     # --- Creazione provider (usa libreria se installata, altrimenti HTTP) ---
+    #     historical_provider = get_pirateweather_historical_provider(self._hass, cfg, opts=opts)
+    #     weather_forecast = WeatherForecast( self._hass, "weather.home_rome", forecast_type="daily")
 
-        weather_season_detector = WeatherSeasonDetector(weatherHistorical=historical_provider, weatherForecast=weather_forecast)
+    #     weather_season_detector = WeatherSeasonDetector(weatherHistorical=historical_provider, weatherForecast=weather_forecast)
 
-        weather_season_data = await weather_season_detector.detect()
-        _LOGGER.debug("async_config_entry_first_refresh %s", weather_season_data)
+    #     weather_season_data = await weather_season_detector.detect()
+    #     _LOGGER.debug("async_config_entry_first_refresh %s", weather_season_data)
 
 
     async def async_config_entry_first_refresh(self) -> None:
@@ -351,6 +355,40 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     # --------------------- DataUpdateCoordinator -------------------- #
 
+    def _debug_dump_entities_state(self, *, max_attr_len: int = 400) -> None:
+        """Logga l'istantanea di self._entities_state (entity -> State)."""
+        try:
+            items = list(self._entities_state.items())
+            items.sort(key=lambda kv: kv[0])  # ordina per entity_id
+
+            lines: list[str] = []
+            for entity_id, st in items:
+                if st is None:
+                    lines.append(f"- {entity_id}: <None>")
+                    continue
+
+                # Attributi (JSON safe + trunc)
+                try:
+                    attrs_json = json.dumps(st.attributes, ensure_ascii=False, default=str)
+                except Exception:
+                    attrs_json = str(st.attributes)
+
+                if len(attrs_json) > max_attr_len:
+                    attrs_json = attrs_json[:max_attr_len] + f"...(+{len(attrs_json)-max_attr_len} chars)"
+
+                friendly = st.attributes.get("friendly_name")
+                lines.append(
+                    f"--------------------------------------------\n"
+                    f"id: {entity_id} - state={repr(st.state)}\n"
+                    f"{f'({friendly})' if friendly else ''}: \n"
+                    f"last change={getattr(st, 'last_changed', None)} - last update={getattr(st, 'last_updated', None)}\n"
+                    f"attrs={attrs_json}\n"
+                )
+
+            _LOGGER.debug("Entities state snapshot (%d items):\n%s", len(items), "\n".join(lines))
+        except Exception as ex:
+            _LOGGER.debug("Failed dumping entities state: %s", ex)
+
     async def _async_update_data(self) -> dict[str, Any]:
         """
         Loop SLOW: raccoglie sensori, calcola grandezze derivate e aggiorna lo snapshot.
@@ -366,7 +404,10 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # }
             # await self._async_temp_test_weater()
             self._season_data = await self._season_detector.detect()
-            _LOGGER.debug("_async_update_data %s", self._season_data)
+            log_debug(_LOGGER, "\n%s", self._season_data)
+
+            # self._debug_dump_entities_state()
+
             return {}
         except Exception as exc:
             raise UpdateFailed(f"Update failed: {exc}") from exc

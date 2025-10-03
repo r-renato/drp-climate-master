@@ -18,7 +18,7 @@ from homeassistant.const import (
 )
 
 from ..helpers.utils import as_int
-from ..domain.models import (
+from ..domain.models.runtime_schema import (
     AreaConfig,
     ClimateConfig,
     CompressorManagementConfig,

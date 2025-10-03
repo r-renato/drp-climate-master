@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import logging
 import sys
-from typing import Optional
-
 
 class PrefixedLogger:
     """
@@ -21,6 +19,7 @@ class PrefixedLogger:
     _HELPER_FUNCS = {
         "log_debug",
         "log_info",
+        "log_warning",
         "_qualname_from_frame",
         "caller_qualname_auto",
     }
@@ -104,6 +103,21 @@ class PrefixedLogger:
         except TypeError:
             logger.info(prefix + msg, *args, **kwargs)
 
+    @staticmethod
+    def log_warning(logger: logging.Logger, msg: str, *args, **kwargs) -> None:
+        """
+        Log WARNING con prefisso del chiamante reale e stacklevel corretto.
+        Uso: PrefixedLogger.log_warning(_LOGGER, "Started %s", name)
+        """
+        if not logger.isEnabledFor(logging.WARNING):
+            return
+
+        prefix = f"[{PrefixedLogger.caller_qualname_auto()}] "
+        stacklevel = kwargs.pop("stacklevel", 2)
+        try:
+            logger.warning(prefix + msg, *args, stacklevel=stacklevel, **kwargs)
+        except TypeError:
+            logger.warning(prefix + msg, *args, **kwargs)
 
 # (Opzionale) API compatibile con le vecchie funzioni:
 def log_debug(logger: logging.Logger, msg: str, *args, **kwargs) -> None:
@@ -112,3 +126,6 @@ def log_debug(logger: logging.Logger, msg: str, *args, **kwargs) -> None:
 
 def log_info(logger: logging.Logger, msg: str, *args, **kwargs) -> None:
     PrefixedLogger.log_info(logger, msg, *args, **kwargs)
+
+def log_warning(logger: logging.Logger, msg: str, *args, **kwargs) -> None:
+    PrefixedLogger.log_warning(logger, msg, *args, **kwargs)

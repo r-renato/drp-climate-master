@@ -28,6 +28,8 @@ from homeassistant.const import (
     PERCENTAGE,
     UnitOfTemperature,
 )
+
+from .helpers.logger import log_info
 from .helpers.utils import computed_float_or_none, slugify, as_float
 
 from .domain.models import SensorPair
@@ -67,7 +69,7 @@ async def async_setup_entry(
     entities: List[SensorEntity] = []
     try:
         for cfg in coordinator.build_slave_sensor_defs():
-            _LOGGER.info("Provo ad aggiungere %s", cfg)
+            log_info(_LOGGER, "Provo ad aggiungere %s", cfg)
             if cfg["type"] == "DewpointSensor":
                 sensor = DewpointSensor(
                     hass=hass,
