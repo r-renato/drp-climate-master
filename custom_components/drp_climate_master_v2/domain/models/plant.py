@@ -11,64 +11,67 @@ from custom_components.drp_climate_master_v2.domain.models.season import SeasonS
 class ZoneSnapshot:
     """
     Istantanea dei **sensori** e dello **stato impianto** per una singola *zona/stanza*
-    al tempo `ts`.
+    all’istante `ts`. Funziona da input coerente per stimatore di stato (es. Kalman),
+    generatore di target di comfort (adaptive) e controllore (PID/MPC-lite), oltre che
+    per i guardiani di sicurezza (dew-point).
 
-    Unità:
-      - Temperature in **°C**
-      - Umidità relativa (RH) in **%**
-      - Comandi/attuazioni on/off come **bool**
-    Il timestamp deve essere **timezone-aware** (consigliato UTC).
+    Unità e convenzioni
+    -------------------
+    • Temperature: **°C** — Umidità relativa: **%** — Attuazioni on/off: **bool**  
+    • `ts` deve essere **timezone-aware** (consigliato **UTC**).
 
-    Questa struttura funge da input coerente per:
-      • lo **stimatore di stato** del modello termico (es. Kalman),
-      • il **generatore di target di comfort** (adaptive),
-      • il **controllore** (PID/MPC-lite) e i **guardiani di sicurezza** (dew-point).
+    Note di validazione (da eseguire a monte)
+    -----------------------------------------
+    • T interna ~[-10, 50] °C; T esterna ~[-30, 60] °C; RH in [0, 100] %.  
+    • Rifiutare snapshot obsoleti (es. `now - ts > 2*step`).  
+    • Se campi opzionali mancano (es. `flow_t`, `return_t`, `out_rh`), degradare le funzioni:
+      DP-guard più conservativo, costo energetico stimato, ecc.
 
     Attributi
     ---------
     ts : datetime
-        Timestamp dell’istantanea (timezone-aware). Usato per allineare snapshot,
-        forecast e scheduling del ciclo di controllo (rilevazione di dati stantii).
+        Timestamp dell’istantanea (timezone-aware). Usato per allineare snapshot, forecast
+        e scheduling del ciclo di controllo (rilevazione di dati stantii).
+
     room_t : float
-        Temperatura aria **nella stanza** (variabile controllata principale).
+        Temperatura aria **nella stanza** (variabile controllata principale / uscita del modello).
+
     room_rh : float
-        Umidità relativa **nella stanza**. Utile per strategie estive/VMC e,
-        in assenza di `room_dp`, per calcolare il dew point.
+        Umidità relativa **nella stanza**. Utile per strategie estive/VMC e, in mancanza di `room_dp`,
+        per calcolare il dew point.
+
     room_dp : float
         **Dew point** in stanza. Vincolo di sicurezza per raffrescamento radiante:
-        il sistema deve garantire `T_flow >= room_dp + safety` (tip. 1.5–2.0 °C).
+        richiede `flow_t >= room_dp + safety` (tip. 1.5–2.0 °C).
+
     room_hi : float
-        **Heat Index** percepito (da T+RH). Può introdurre bias al target estivo
-        o guidare l’aumento della ventilazione quando il caldo è opprimente.
+        **Heat Index** percepito (da T+RH). Può introdurre bias al target estivo o guidare
+        l’aumento della ventilazione quando il caldo è opprimente.
+
     mean_apt_t : Optional[float]
-        Temperatura **media appartamento** (aggregata su più stanze). Proxy della
-        massa termica/accoppiamenti inter-zona, utile a stabilizzare stime e target.
+        Temperatura **media appartamento** (aggregata su più stanze). Proxy della massa termica
+        e degli accoppiamenti inter-zona; stabilizza stime e target.
+
     mean_apt_rh : Optional[float]
         Umidità relativa **media appartamento**. Utile per strategie VMC/globali.
-    out_t : float
-        Temperatura **esterna** istantanea. Disturbo principale del modello
-        e base per il **comfort adattivo** (running mean esterna).
-    out_rh : Optional[float]
-        Umidità relativa **esterna**. Utile per stimare il dew point esterno o
-        valutare opportunità di free-cooling/deumidifica con VMC.
-    flow_t : Optional[float]
-        Temperatura **mandata** del circuito di zona/collettore. Necessaria per
-        Dew-Point Guard e, assieme a `return_t`, per stimare la potenza termica.
-    return_t : Optional[float]
-        Temperatura **ritorno** del circuito di zona. Con `flow_t` dà ΔT idronico,
-        proxy della potenza assorbita/erogata per penalizzazioni energetiche.
-    act_state : Optional[bool]
-        **Ultimo comando** applicato all’attuatore della zona (on/off). Serve per
-        predizione di stato, **rate-limiting** e vincoli di variazione (|Δu|).
 
-    Note
-    ----
-    • Campi opzionali mancanti (es. `flow_t`, `return_t`, `out_rh`) consentono modalità
-      ridotte: DP-guard più conservativo, costi energetici stimati, ecc.
-    • Validazioni tipiche (da fare a monte):
-        – T interna: ~[-10, 50] °C; T esterna: ~[-30, 60] °C
-        – RH: [0, 100] %
-        – `ts` non troppo distante dall’ora corrente (evitare dati stantii)
+    out_t : float
+        Temperatura **esterna** istantanea. Disturbo principale del modello e base per il
+        **comfort adattivo** (running mean esterna).
+
+    out_rh : Optional[float]
+        Umidità relativa **esterna**. Utile per stimare dew point esterno e valutare free-cooling/deumidifica.
+
+    flow_t : Optional[float]
+        Temperatura **mandata** del circuito di zona/collettore. Necessaria per Dew-Point Guard e,
+        assieme a `return_t`, per stimare la potenza termica (ΔT idronico).
+
+    return_t : Optional[float]
+        Temperatura **ritorno** del circuito di zona. Con `flow_t` fornisce ΔT idronico (proxy potenza/efficienza).
+
+    act_state : Optional[bool]
+        **Ultimo comando** on/off applicato all’attuatore della zona. Utile per predizione di stato,
+        **rate limiting** e vincoli di variazione (|Δu|).
     """
 
     ts: datetime
@@ -92,85 +95,63 @@ class ZoneSnapshot:
 @dataclass(slots=True)
 class PDCSnapshot:
     """
-    Istantanea degli **stati e temperature della Pompa di Calore (PDC)** e del
-    circuito tecnico associato, utile per orchestrazione (mode/mix), vincoli di
-    sicurezza e controllo avanzato (PID/MPC-lite). Tutte le temperature sono in **°C**.
-    Il timestamp **deve** essere timezone-aware (consigliato **UTC**).
+    Istantanea degli **stati** e delle **temperature** della Pompa di Calore (PDC)
+    e del circuito tecnico associato. È usata da orchestratore (mode/mix), safety
+    (min-on/min-off, controlli su ΔT) e controllore (PID/MPC-lite) per vincoli e costi.
 
-    Uso tipico
-    ----------
-    - **Orchestratore**: selezione modalità (heating/cooling/DHW/defrost/standby),
-      consenso all’attuazione, logiche di pre-heating/pre-cooling.
-    - **Safety layer**: gestione min-on/min-off, controlli su ΔT, diagnosi anomalie.
-    - **Controllore/MPC**: vincoli su temperature disponibili, stima potenza,
-      penalizzazioni energetiche.
+    Unità e convenzioni
+    -------------------
+    • Temperature: **°C** — Durate: **minuti** — Flag/Mode: boolean/int vendor-specific  
+    • `timestamp` deve essere **timezone-aware** (consigliato **UTC**).  
+    • **WOT** = *Water Outlet Temperature* (setpoint di mandata lato generatore).
 
     Attributi
     ---------
     timestamp : datetime
-        Istante di rilevazione dello snapshot (timezone-aware). Serve ad allineare
-        i cicli di controllo e a rilevare dati stantii.
+        Istante di rilevazione dello snapshot (timezone-aware).
 
-    pdc_fm_power_on : bool
+    fm_power_on : bool
         Stato ON/OFF del modulo di movimentazione fluido lato PDC (es. **Flow Manager** /
-        circolatore principale / fan module del gruppo). True ⇒ circolazione attiva.
+        circolatore principale / fan module). True ⇒ circolazione attiva.
 
-    pdc_power_on : Optional[bool]
-        Stato ON/OFF della **Pompa di Calore** (compressore/centralina in marcia).
-        Può essere `None` se il dato non è disponibile (sensoristica parziale).
+    power_on : Optional[bool]
+        Stato ON/OFF della **PDC** (compressore/centralina in marcia). Può essere `None`
+        se il dato non è disponibile.
 
-    pdc_device_mode : Optional[int]
-        Modalità operativa **grezza** della PDC come codice numerico **vendor-specific**
-        (esempi tipici da mappare: 0=standby, 1=heating, 2=cooling, 3=dhw, 4=defrost).
-        Va **normalizzato** a valle per le logiche applicative.
+    device_mode : Optional[int]
+        Modalità operativa **grezza** (codice numerico *vendor-specific*: es. 0=standby, 1=heating,
+        2=cooling, 3=dhw, 4=defrost). Va normalizzata a valle.
 
-    pdc_wot_heat : Optional[float]
-        **Water Outlet Temperature (WOT) setpoint** lato PDC in **riscaldamento**. In molte macchine
-        è il risultato della **curva climatica** (compensazione climatica) + eventuali offset.
+    wot_heat : Optional[float]
+        Setpoint **WOT** in **riscaldamento** (spesso da curva climatica + offset).
 
-    pdc_delta_t_heat : Optional[float]
-        **Offset/Delta** applicato al setpoint WOT in riscaldamento (boost/eco). Utile per
-        strategie temporanee o pre-heating (valore positivo ⇒ alza la mandata obiettivo).
+    delta_t_heat : Optional[float]
+        Offset/Delta applicato al setpoint WOT in riscaldamento (boost/eco; >0 ⇒ alza mandata obiettivo).
 
-    pdc_wot_cool : Optional[float]
-        **WOT setpoint** lato PDC in **raffrescamento** (temperatura acqua fredda desiderata).
+    wot_cool : Optional[float]
+        Setpoint **WOT** in **raffrescamento** (temperatura acqua fredda desiderata).
 
-    pdc_delta_t_cool : Optional[float]
-        **Offset/Delta** applicato al setpoint WOT in raffrescamento (più basso ⇒ acqua più fredda).
+    delta_t_cool : Optional[float]
+        Offset/Delta applicato al setpoint WOT in raffrescamento (più basso ⇒ acqua più fredda).
 
-    pdc_t_water_in_pe : Optional[float]
-        Temperatura **ingresso** acqua lato **plate/exchanger** PDC (lato impianto). Misura utile
-        per diagnosi scambi e calcolo ΔT locale sul generatore.
+    t_water_in_pe : Optional[float]
+        Temperatura **ingresso** acqua lato scambiatore/plate della PDC (lato impianto).
 
-    pdc_t_water_out_pe : Optional[float]
-        Temperatura **uscita** acqua lato **plate/exchanger** PDC (lato impianto). Con `pdc_t_water_in_pe`
-        consente di ricavare **ΔT PDC** (= out_pe − in_pe) come proxy di scambio/potenza sul generatore.
+    t_water_out_pe : Optional[float]
+        Temperatura **uscita** acqua lato scambiatore/plate della PDC (lato impianto). Con `t_water_in_pe`
+        consente di stimare **ΔT PDC** (= out_pe − in_pe), proxy dello scambio sul generatore.
 
     boiler_supply_temp : Optional[float]
-        **Mandata** circuito tecnico/distribuzione (post PDC/miscelazione). Serve per verificare
-        che la temperatura disponibile sia coerente con la domanda utenze (radianti/fancoil).
+        **Mandata** circuito tecnico/distribuzione (post PDC/miscelazione). Verifica coerenza con domanda utenze.
 
     boiler_return_temp : Optional[float]
-        **Ritorno** circuito tecnico/distribuzione. Con la mandata fornisce **ΔT idronico** della
-        rete (proxy del carico reale lato impianto).
+        **Ritorno** circuito tecnico/distribuzione. Con la mandata fornisce **ΔT idronico** della rete (proxy carico).
 
     minutes_power_on : Optional[float]
-        Minuti consecutivi in **stato acceso** (PDC/gruppo). Usato per policy **min-on time**
-        e per individuare cicli troppo brevi.
+        Minuti consecutivi in **stato acceso** (PDC/gruppo). Usato per policy **min-on time** e per diagnosi cicli brevi.
 
     minutes_power_off : Optional[float]
-        Minuti consecutivi in **stato spento**. Usato per policy **min-off time** e anticycling.
-
-    Note
-    ----
-    - **WOT** = *Water Outlet Temperature* (setpoint di mandata lato generatore).
-    - I codici di `pdc_device_mode` sono **fornitore-specifici**: definire una mappa di normalizzazione.
-    - Range indicativi:
-        * WOT riscaldamento: ~30–55 °C; WOT raffrescamento: ~7–20 °C
-        * ΔT idronico rete (boiler_supply − boiler_return): tip. 3–10 °C
-        * ΔT PDC (out_pe − in_pe): variabile per macchina/condizioni
-    - Validazioni consigliate: timestamp recente, temperature plausibili, coerenza
-      tra mode e setpoint (es. in cooling non impostare WOT > 25 °C).
+        Minuti consecutivi in **stato spento**. Usato per policy **min-off time** e anti-short-cycling.
     """
 
     timestamp: datetime
@@ -194,20 +175,69 @@ class PDCSnapshot:
     minutes_power_on: Optional[float]
     minutes_power_off: Optional[float]
 
+
 @dataclass(slots=True)
 class VMCSnapshot:
     """
-    Istantanea della **Ventilazione Meccanica Controllata (VMC)**.
+    Istantanea della **Ventilazione Meccanica Controllata (VMC)** / UTA domestica.
+    Fornisce stato, richieste termiche e setpoint utili a orchestratore/safety/MPC.
 
-    Campi suggeriti:
-      • fan_level: int — step di ventilazione
-      • bypass_active: bool — bypass scambiatore attivo (free-cooling)
-      • supply_rh / extract_rh: Optional[float] — RH mandata/estrazione
-      • supply_t / extract_t: Optional[float] — T mandata/estrazione
-      • faults: tuple[str, ...] — codici allarmi/guasti
+    Unità e convenzioni
+    -------------------
+    • Temperature: **°C** — Umidità: **%** — Flag: **bool** — Impostazioni vendor: **int/str**  
+    • I campi non disponibili possono restare `None`; le logiche degradano in sicurezza.
 
-    Al momento è un segnaposto documentato, pronto per essere esteso.
+    Attributi (principali)
+    ----------------------
+    timestamp : datetime
+        Istante di rilevazione (timezone-aware).
+
+    power_on : Optional[bool]
+        Stato ON/OFF VMC/UTA.
+
+    t_setpoint : Optional[float]
+        Setpoint di temperatura di mandata aria (se supportato).
+
+    rh_setpoint : Optional[float]
+        Setpoint di umidità (se supportato).
+
+    t_dew_point_setpoint : Optional[float]
+        Setpoint di punto di rugiada per controllo anti-condensa sull’aria trattata.
+
+    delta_t_dew_point_setpoint : Optional[float]
+        Offset dinamico al setpoint di dew point (safety margin o correzioni temporanee).
+
+    spare_setpoint : Optional[int]
+        Setpoint ausiliario (segnaposto per funzioni vendor-specific).
+
+    act_vent_recirculation / act_force_heating / act_force_cooling / act_force_free_cooling : Optional[bool]
+        Forzature operative (ricircolo, heating/cooling, free-cooling). Da usare con cautela nelle politiche.
+
+    processing_mode : Optional[str]
+        Modo operativo (stringa controllata: es. "auto", "manual", "eco", "boost", ecc.).
+
+    compressor_management / cooling_management : Optional[int]
+        Gestione compressore/raffrescamento (codici vendor-specific).
+
+    request_water / request_dehumidification / request_heating / request_cooling : Optional[bool]
+        **Richieste** della VMC verso il circuito idronico o l’impianto (domanda di fluido o di servizio).
+
+    sensor_t_ambient / sensor_h_ambient : Optional[float]
+        Sensori aria ambiente lato VMC (T e RH).
+
+    sensor_t_water : Optional[float]
+        Temperatura acqua allo scambiatore VMC (se presente).
+
+    sensor_t_outdoor : Optional[float]
+        Sensore esterno integrato VMC (se diverso dal meteo provider).
+
+    sensor_power_on_night / sensor_power_on_today : Optional[float]
+        Minuti di funzionamento notturno/odierno (telemetria statistica).
+
+    alarm_high_pressure / alarm_dew_point / alarm_low_water_temp / alarm_high_water_temp / alarm_alarm : Optional[bool]
+        Segnali d’allarme principali (alta pressione, dew-point, acqua troppo fredda/calda, fault generico).
     """
+
     timestamp: datetime
     power_on: Optional[bool]
 
@@ -249,17 +279,31 @@ class VMCSnapshot:
 @dataclass(slots=True)
 class SupplyUnitSnapshot:
     """
-    Istantanea dell’unità di **trattamento aria/UTA** o di un’unità di distribuzione
-    (miscelatrice, valvole, pompe).
+    Istantanea dell’**unità di distribuzione** (es. miscelatrice, valvole, pompe,
+    UTA di mandata). Descrive potenza idronica disponibile e stato dei rami.
 
-    Campi suggeriti:
-      • pump_on: bool — stato pompa
-      • valve_pos: Optional[float] — posizione valvola 0..100 %
-      • supply_t_setpoint: Optional[float] — setpoint mandata
-      • faults: tuple[str, ...] — codici allarmi/guasti
+    Attributi
+    ---------
+    timestamp : datetime
+        Istante di rilevazione (timezone-aware).
 
-    Al momento è un segnaposto documentato, pronto per essere esteso.
+    direct_su_power_on / adjustable_su_power_on : Optional[bool]
+        Stato rami **diretto** e **miscelato/modulabile** (abilitazione pompe/valvole).
+
+    three_point_mixing_valve : Optional[int]
+        Stato comando **valvola a 3 punti** (-1 = chiudi/raffredda, 0 = stop, +1 = apri/riscalda).
+        Convenzione da confermare con l’hardware.
+
+    sensor_boiler_temp_system_supply / sensor_boiler_temp_system_return : Optional[float]
+        Temperature mandata/ritorno sul circuito tecnico.
+
+    sensor_adjustable_temp_system_supply / sensor_adjustable_temp_system_return : Optional[float]
+        Temperature mandata/ritorno sul ramo miscelato/modulabile.
+
+    sensor_direct_temp_system_supply / sensor_direct_temp_system_return : Optional[float]
+        Temperature mandata/ritorno sul ramo diretto.
     """
+
     timestamp: datetime
     direct_su_power_on: Optional[bool]
     adjustable_su_power_on: Optional[bool]
@@ -276,41 +320,56 @@ class SupplyUnitSnapshot:
 @dataclass(slots=True)
 class PlantSnapshot:
     """
-    Istantanea dello **stato globale dell’impianto** al tempo `ts`.
+    Istantanea dello **stato globale dell’impianto** all’istante `timestamp`.
+    Aggrega zone, stagione, generatori e unità di distribuzione per consentire
+    decisioni di alto livello (orchestrazione, sicurezza, ottimizzazione).
 
     Attributi
     ---------
-    ts : datetime
+    timestamp : datetime
         Timestamp della fotografia dell’impianto (timezone-aware).
+
     season : SeasonState
-        Stato di stagione/meteo-stagionale (es. WINTER/SUMMER, regole, bias).
+        Stato di stagione/meteo-stagionale (es. WINTER/SUMMER) con regole/bias applicativi.
+
     zones : dict[str, ZoneSnapshot]
         Mappa *nome-zona → ZoneSnapshot*. Deve contenere almeno le zone “core”.
-    out_t : Optional[float]
-        Temperatura esterna globale (se non presente in ogni zona).
-    out_rh : Optional[float]
-        Umidità esterna globale (se non presente in ogni zona).
+
+    out_t / out_rh : Optional[float]
+        Sensori esterni **globali** (se non forniti per-zona). Usati come fallback.
+
     dew_guard_active : Optional[bool]
         Flag globale del **Dew-Point Guard** (true se attivo in questa iterazione).
+
     free_cooling_possible : Optional[bool]
         True se le condizioni esterne consentono **free-cooling** (policy lato VMC).
-    vmc : Optional[VMCSnapshot]
-        Stato VMC, se disponibile.
-    pdc : Optional[PDCSnapshot]
-        Stato PDC/generatore, se disponibile.
-    supply_unit : Optional[SupplyUnitSnapshot]
-        Stato unità di distribuzione (pompe/valvole/UTA), se disponibile.
+
+    vmc / pdc / supply_unit : Optional[...Snapshot]
+        Stati della VMC, PDC/generatore e unità di distribuzione (se disponibili).
+
+    home_windows_state : Optional[bool]
+        Stato finestre *aggregato* (True = almeno una finestra aperta). Utile per
+        politiche di sicurezza/efficienza (es. stop raffrescamento se finestre aperte).
+
+    presence_vacation : Optional[bool]
+        Flag presenza “vacanza/assenza prolungata” (True = casa non occupata per periodo esteso).
+
+    presence_nobodysin : Optional[bool]
+        Flag presenza “nessuno in casa ora” (True = assente nell’immediato). Consente setback/eco.
+
     faults : tuple[str, ...]
-        Eventuali **faults**/allarmi di impianto aggregati.
+        Elenco di eventuali **faults/allarmi** di impianto aggregati (codici brevi/slug).
 
     Metodi utility
     --------------
     mean_indoor_temperature() -> Optional[float]
         Media semplice delle temperature delle zone presenti (esclude None).
+
     mean_indoor_humidity() -> Optional[float]
         Media semplice delle RH delle zone presenti (esclude None).
+
     iter_zone_names() -> Iterable[str]
-        Iteratore sui nomi delle zone (ordine di dizionario).
+        Iteratore sui nomi delle zone (ordine del dizionario).
     """
 
     timestamp: datetime
@@ -325,12 +384,17 @@ class PlantSnapshot:
     vmc: Optional[VMCSnapshot] = None
     pdc: Optional[PDCSnapshot] = None
     supply_unit: Optional[SupplyUnitSnapshot] = None
+
+    home_windows_state: Optional[bool] = None
+
+    presence_vacation: Optional[bool] = None
+    presence_nobodysin: Optional[bool] = None
+
     faults: tuple[str, ...] = ()
 
     def mean_indoor_temperature(self) -> Optional[float]:
         """
         Restituisce la **media semplice** delle temperature delle zone disponibili.
-
         Esclude valori None; se nessuna temperatura è disponibile, restituisce None.
         """
         temps = [z.room_t for z in self.zones.values() if z.room_t is not None]
@@ -341,7 +405,6 @@ class PlantSnapshot:
     def mean_indoor_humidity(self) -> Optional[float]:
         """
         Restituisce la **media semplice** delle umidità relative delle zone disponibili.
-
         Esclude valori None; se nessuna RH è disponibile, restituisce None.
         """
         humis = [z.room_rh for z in self.zones.values() if z.room_rh is not None]
