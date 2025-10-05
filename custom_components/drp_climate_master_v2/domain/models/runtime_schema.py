@@ -6,7 +6,7 @@ from datetime import timedelta
 from typing import Optional, List
 
 # ---- Aree ---------------------------------------------------------------
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class SensorPair:
     temperature: str
     humidity: str
@@ -173,6 +173,7 @@ class ClimateConfig:
     weather: WeatherConfig
     scenarios: ScenariosConfig
     temperature_unit: str
+    home_mean: Optional[SensorPair]
 
 # ======================================================
 # Runtime

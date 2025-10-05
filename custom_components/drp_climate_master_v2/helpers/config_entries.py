@@ -17,6 +17,8 @@ from homeassistant.const import (
     CONF_TEMPERATURE_UNIT,
 )
 
+from custom_components.drp_climate_master_v2.helpers.logger import log_info
+
 from ..helpers.utils import as_int
 from ..domain.models.runtime_schema import (
     AreaConfig,
@@ -167,7 +169,7 @@ def subscribe_entity_state_changes(
         return None
 
     unsubscribe: CALLBACK_TYPE = async_track_state_change_event(hass, ids, callback)
-    _LOGGER.info("setup_entity_change: ascolto attivo per %s", ", ".join(ids))
+    log_info(_LOGGER, "Ascolto attivo per %s", ", ".join(ids))
 
     if on_remove is not None:
         try:
@@ -305,6 +307,7 @@ def build_runtime_config(entry: ConfigEntry) -> RuntimeConfig:
         weather=WeatherConfig(forecast_data=fd, historical_data=hd),
         scenarios=ScenariosConfig(**climate_cfg[CONF_SCENARIOS]),
         temperature_unit=climate_cfg.get(CONF_TEMPERATURE_UNIT, DEFAULT_TEMP_UNIT),
+        home_mean=SensorPair("", "")
     )
 
     caps = PlantCapabilities(

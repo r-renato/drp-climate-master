@@ -1,7 +1,6 @@
 """Costanti per DRP Climate Master (Foundation)."""
 from __future__ import annotations
 
-from datetime import timedelta
 from functools import lru_cache
 from typing import NamedTuple, Final
 from importlib.resources import files  # Python 3.9+

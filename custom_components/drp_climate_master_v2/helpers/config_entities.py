@@ -14,7 +14,6 @@ def _platform_to_str(platform: Platform | str) -> str:
     """Converte Platform enum o string in domain string."""
     return platform.value if isinstance(platform, Platform) else str(platform)
 
-
 def get_integration_platform(
     hass: HomeAssistant,
     integration_domain: str,

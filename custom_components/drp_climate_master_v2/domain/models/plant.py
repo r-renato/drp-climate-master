@@ -4,8 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterable, Optional
 
-from custom_components.drp_climate_master_v2.domain.models.season import SeasonState
-
+from .season import SeasonState
 
 @dataclass(slots=True)
 class ZoneSnapshot:

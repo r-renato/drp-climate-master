@@ -29,10 +29,13 @@ from homeassistant.const import (
     UnitOfTemperature,
 )
 
-from .helpers.logger import log_info
+from .domain.models.runtime_schema import SensorPair
+
+from .controller.coordinator import ClimateCoordinator
+
+from .helpers.logger import log_debug, log_info, log_warning
 from .helpers.utils import computed_float_or_none, slugify, as_float
 
-from .domain.models import SensorPair
 from .helpers.psychrometric import celsius_to_fahrenheit, dew_point_celsius, heat_index_celsius
 from .const import (
     COORDINATOR,
@@ -57,10 +60,17 @@ async def async_setup_entry(
     - Li registra con async_add_entities
     """
     store = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
-    coordinator = store.get(COORDINATOR)
-    unique_id = store.setdefault("unique_id", {})
+    coordinator: ClimateCoordinator = store.get(COORDINATOR)
+    # unique_id = store.setdefault("unique_id", {})
+    area_unique_ids_store = store.setdefault("area_unique_ids", {})
+    home_unique_ids_store = store.setdefault("home_unique_ids", {})
+
+    def _set_area_id(area: str, attribute: str, sensor: Any) -> None:
+        """..."""
+        area_unique_ids_store.setdefault(area, {attribute: sensor})
+
     if coordinator is None:
-        _LOGGER.warning(
+        log_warning(_LOGGER,
             "Coordinator non trovato per entry %s: nessuna entity sensor aggiunta",
             entry.entry_id,
         )
@@ -69,7 +79,7 @@ async def async_setup_entry(
     entities: List[SensorEntity] = []
     try:
         for cfg in coordinator.build_slave_sensor_defs():
-            log_info(_LOGGER, "Provo ad aggiungere %s", cfg)
+            log_info(_LOGGER, "Try to add %s", cfg)
             if cfg["type"] == "DewpointSensor":
                 sensor = DewpointSensor(
                     hass=hass,
@@ -79,7 +89,8 @@ async def async_setup_entry(
                     sensors=cfg["sensors"],
                     temperature_unit=cfg["unit"],
                 )
-                unique_id[sensor.unique_id] = None
+                # unique_id[sensor.unique_id] = None
+                _set_area_id(cfg.get("area", "default"), "dew_point", sensor)
                 entities.append(sensor)
 
             if cfg["type"] == "HeatIndexSensor":
@@ -91,7 +102,8 @@ async def async_setup_entry(
                     sensors=cfg["sensors"],
                     temperature_unit=cfg["unit"],
                 )
-                unique_id[sensor.unique_id] = None
+                # unique_id[sensor.unique_id] = None
+                _set_area_id(cfg.get("area", "default"), "heat_index", sensor)
                 entities.append(sensor)
 
             if cfg["type"] == "CurrentTemperatureSensor":
@@ -103,7 +115,8 @@ async def async_setup_entry(
                     temp_sensors=cfg["temp_sensors"],
                     temperature_unit=cfg["unit"],
                 )
-                unique_id[sensor.unique_id] = None
+                # unique_id[sensor.unique_id] = None
+                home_unique_ids_store["temperature"] = sensor
                 entities.append(sensor)
 
             if cfg["type"] == "CurrentHumiditySensor":
@@ -115,7 +128,8 @@ async def async_setup_entry(
                     humi_sensors=cfg["humi_sensors"],
                     humidity_unit=cfg["unit"],
                 )
-                unique_id[sensor.unique_id] = None
+                # unique_id[sensor.unique_id] = None
+                home_unique_ids_store["humidity"] = sensor
                 entities.append(sensor)
 
             if cfg["type"] == "CurrentDewpointSensor":
@@ -128,7 +142,8 @@ async def async_setup_entry(
                     humi_sensors=cfg["humi_sensors"],
                     temperature_unit=cfg["unit"],
                 )
-                unique_id[sensor.unique_id] = None
+                # unique_id[sensor.unique_id] = None
+                home_unique_ids_store["dew_point"] = sensor
                 entities.append(sensor)
 
             if cfg["type"] == "CurrentHeatIndexSensor":
@@ -141,8 +156,12 @@ async def async_setup_entry(
                     humi_sensors=cfg["humi_sensors"],
                     temperature_unit=cfg["unit"],
                 )
-                unique_id[sensor.unique_id] = None
+                # unique_id[sensor.unique_id] = None
+                home_unique_ids_store["heat_index"] = sensor
                 entities.append(sensor)
+
+        log_debug(_LOGGER, "area_unique_ids_store %s", area_unique_ids_store)
+        log_debug(_LOGGER, "home_unique_ids_store %s", home_unique_ids_store)
 
     except Exception as ex:  # noqa: BLE001
         _LOGGER.exception("Errore durante creazione sensori dew-point: %s", ex)

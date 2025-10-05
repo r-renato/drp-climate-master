@@ -10,9 +10,11 @@ from typing import Any, Optional
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, Event, EventStateChangedData, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from homeassistant.const import PERCENTAGE
+from homeassistant.const import PERCENTAGE, EVENT_HOMEASSISTANT_STARTED
 
-from ..helpers.logger import log_debug, log_warning
+from ..domain.models.runtime_schema import AreaConfig, RuntimeConfig
+
+from ..helpers.logger import log_debug, log_info, log_warning
 
 from ..domain.models.season import SeasonState
 
@@ -57,11 +59,10 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._entities_state_store: dict = entry_store[ENTITIES_STATE]
 
         # Config di runtime e subscribe ai cambi di stato
-        self._runtime = build_runtime_config(entry)
+        self._runtime: RuntimeConfig = build_runtime_config(entry)
         # _LOGGER.debug("Runtime config %s", self._runtime)
 
         eids = collect_entity_ids_for_state_changes(self._runtime)
-        log_debug(_LOGGER, "\n%s", eids)
         # Conserva l'unsubscribe per lo stop/unload
         self._unsub_state_changes = subscribe_entity_state_changes(
             self._hass, callback=self.entity_changed, entity_ids=eids
@@ -100,7 +101,29 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             update_interval=self._runtime.update_interval,  # loop SLOW
         )
 
+        self._unsub_hastarted_event = hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, self._async_complete_runtime_config)
         _LOGGER.debug("ClimateCoordinator initialized. Update each %s seconds", self._runtime.update_interval)
+
+    async def _async_complete_runtime_config(self, event: Event) -> None:
+        def _find_area(areas: list[AreaConfig], name: str) -> Optional[AreaConfig]:
+            return next((a for a in areas if a.name == name), None)
+        
+        store = self._hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {})
+        area_unique_ids_store = store.setdefault("area_unique_ids", {})
+        home_unique_ids_store = store.setdefault("home_unique_ids", {})
+
+        for area, data in area_unique_ids_store.items():
+            area_cfg = _find_area(self._runtime.climate.areas, area)
+            if not area_cfg:
+                log_warning(_LOGGER, "Area '%s' non definita in RuntimeConfig; salto", area)
+                continue
+
+            attribute, sensordata = next(iter(data.items()))
+            setattr(area_cfg.sensors, attribute, sensordata.entity_id)
+
+        for attribute, sensor in home_unique_ids_store.items():
+            setattr(self._runtime.climate.home_mean, attribute, sensor.entity_id)
+            log_info(_LOGGER, "Add %s for Home mean '%s' in RuntimeConfig.", attribute, sensor.entity_id)
 
     # ----------------- Accesso allo store condiviso ----------------- #
 
@@ -131,6 +154,7 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     defs.append(
                         {
                             "type" : "DewpointSensor",
+                            "area": area.name,
                             "name": f"Ambient {area.name}",
                             "sensors": sensors,  # es. SensorPair o dict compatibile
                             "unit": self._runtime.climate.temperature_unit,
@@ -139,6 +163,7 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     defs.append(
                         {
                             "type" : "HeatIndexSensor",
+                            "area": area.name,
                             "name": f"Ambient {area.name}",
                             "sensors": sensors,  # es. SensorPair o dict compatibile
                             "unit": self._runtime.climate.temperature_unit,
