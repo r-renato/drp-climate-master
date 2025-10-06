@@ -6,7 +6,7 @@ from inspect import Parameter, signature
 import math
 import re
 from decimal import Decimal
-from typing import TypeVar, Type, Any
+from typing import TypeVar, Type, Any, Literal
 
 from homeassistant.core import State as HAState
 from homeassistant.const import STATE_UNKNOWN, STATE_UNAVAILABLE
@@ -402,5 +402,83 @@ def make_class(cls: Type[T], /, *, drop_none: bool = True, strict: bool = True, 
 
     return cls(**values)
 
+def pad(
+    s: str,
+    width: int,
+    *,
+    align: Literal["left", "right", "center"] = "left",
+    fill: str = " ",
+    truncate: bool = False,
+    ellipsis: str = "…",
+) -> str:
+    """
+    Restituisce `s` portata a lunghezza `width` con padding e allineamento scelti.
+
+    Parametri
+    ---------
+    s : str
+        Testo sorgente.
+    width : int
+        Larghezza desiderata (numero di caratteri). Se <= 0, ritorna stringa vuota.
+    align : {"left","right","center"}, default "left"
+        Allineamento del testo dentro il campo.
+    fill : str, default " "
+        Pattern di riempimento (può avere lunghezza > 1; verrà ripetuto e tagliato).
+    truncate : bool, default False
+        Se True e `len(s) > width`, tronca `s` per farla rientrare.
+    ellipsis : str, default "…"
+        Ellissi da usare in troncamento (se `truncate=True`).
+
+    Ritorna
+    -------
+    str
+        Stringa paddata (o troncata).
+
+    Note
+    ----
+    - Se `truncate=False` e `len(s) > width`, la stringa originale è restituita (non troncata).
+    - Per monospace/log è spesso comodo `fill=" "` o `fill="·"`.
+    """
+    if width <= 0:
+        return ""
+
+    n = len(s)
+    if n == width:
+        return s
+
+    if n > width:
+        if not truncate:
+            return s
+        # Troncamento con ellissi
+        if width <= len(ellipsis):
+            return ellipsis[:width]
+        keep = width - len(ellipsis)
+        if align == "left":
+            return s[:keep] + ellipsis
+        elif align == "right":
+            return ellipsis + s[-keep:]
+        else:  # center: conserva testa e coda
+            left_keep = keep // 2
+            right_keep = keep - left_keep
+            return s[:left_keep] + ellipsis + s[-right_keep:]
+
+    # Qui n < width: serve padding
+    missing = width - n
+    if not fill:
+        fill = " "  # fallback
+
+    def make_pad(k: int) -> str:
+        # ripeti il pattern e taglia alla lunghezza richiesta
+        times = (k + len(fill) - 1) // len(fill)
+        return (fill * times)[:k]
+
+    if align == "left":
+        return s + make_pad(missing)
+    elif align == "right":
+        return make_pad(missing) + s
+    else:  # center
+        left = missing // 2
+        right = missing - left
+        return make_pad(left) + s + make_pad(right)
 
 

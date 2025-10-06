@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone, tzinfo
 from zoneinfo import ZoneInfo
 from typing import Iterable, Optional, Tuple
+
+from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 
 __all__ = [
     "UTC",
@@ -28,11 +30,19 @@ UTC = timezone.utc
 
 
 # ────────────────────────────── Clock & TZ ──────────────────────────────
+def ha_timezone(hass: HomeAssistant) -> Tuple[Optional[str], tzinfo]:
+    """Restituisce il nome e l'oggetto tzinfo della timezone di Home Assistant."""
+    tz_name: str | None = hass.config.time_zone          # es. "Europe/Rome"
+    tzinfo: tzinfo = dt_util.get_time_zone(tz_name) or dt_util.UTC if tz_name else dt_util.UTC
+    return tz_name, tzinfo
 
 def now_utc() -> datetime:
     """Datetime-aware in UTC."""
     return datetime.now(UTC)
 
+def now_tz(tz: tzinfo) -> datetime:
+    """Datetime-aware in tz."""
+    return datetime.now(tz)
 
 def ensure_tz(dt: datetime, tz: tzinfo) -> datetime:
     """

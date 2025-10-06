@@ -12,13 +12,13 @@ from homeassistant.core import HomeAssistant, Event, EventStateChangedData, call
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.const import PERCENTAGE, EVENT_HOMEASSISTANT_STARTED
 
+
 from ..domain.models.runtime_schema import AreaConfig, RuntimeConfig
+from ..domain.models.season import SeasonState
 
 from ..helpers.plant import take_plant_snapshot
 from ..helpers.logger import log_debug, log_info, log_warning
-
-from ..domain.models.season import SeasonState
-
+from ..helpers.timeutils import ha_timezone, now_tz
 from ..helpers.config_entries import (
     build_runtime_config,
     collect_entity_ids_for_state_changes,
@@ -431,16 +431,19 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # }
             # await self._async_temp_test_weater()
             self._season_data = await self._season_detector.detect()
+            log_debug(_LOGGER, "TEST A\n%s", self._season_data)
+            
             plat_snapshot = take_plant_snapshot(
                 self._runtime,
                 self._season_data,
                 self._entities_state,
+                now_tz(ha_timezone(self._hass)[1])
             )
-            log_debug(_LOGGER, "\n%s", self._season_data)
-            log_debug(_LOGGER, "\n%s", plat_snapshot)
+            log_debug(_LOGGER, "TEST B\n%s", plat_snapshot)
 
             # self._debug_dump_entities_state()
 
             return {}
         except Exception as exc:
+            log_warning(_LOGGER, "Update failed: %s", exc, exc_info=True)
             raise UpdateFailed(f"Update failed: {exc}") from exc

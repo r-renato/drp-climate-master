@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from typing import List
-
+from datetime import datetime
 
 from .logger import log_warning
 
@@ -24,7 +24,6 @@ from ..domain.models.runtime_schema import (
     VMCConfig,
 )
 from ..domain.models.season import SeasonState
-from .timeutils import now_utc
 from .utils import as_bool, as_float, as_int, make_class
 
 _LOGGER = logging.getLogger(__name__)
@@ -33,12 +32,13 @@ def take_plant_snapshot(
     runtime_config: RuntimeConfig,
     season: SeasonState,
     entities_state: dict,
+    timestamp: datetime,
 ) -> PlantSnapshot:
     """Build a plant snapshot collecting HA entity states."""
 
-    def _build_zones_snapshot(runtime_config: RuntimeConfig) -> List[ZoneSnapshot]:
+    def _build_zones_snapshot(runtime_config: RuntimeConfig, ts: datetime) -> dict[str, ZoneSnapshot]:
         """Helper to build a ZoneSnapshot from area configs."""
-        zone_snapshots: List[ZoneSnapshot] = []
+        zone_snapshots: dict[str, ZoneSnapshot] = {}
 
         supply_unit_sensor: SupplyUnitSensors = runtime_config.climate.devices.supply_units.sensors
         flow_t = as_float(get_entity_value(entities_state, supply_unit_sensor.boiler_temp_system_supply))
@@ -47,8 +47,9 @@ def take_plant_snapshot(
         areas: List[AreaConfig] = runtime_config.climate.areas
         for area in areas:
             sensors = area.sensors
-            timestamp=now_utc(),
-            name=area.name,
+            timestamp=ts
+            name=area.name
+            valve_state = None
             room_t = as_float(get_entity_value(entities_state, sensors.temperature))
             room_rh = as_float(get_entity_value(entities_state, sensors.humidity))
 
@@ -63,7 +64,7 @@ def take_plant_snapshot(
                 zone_snapshot: ZoneSnapshot = make_class(
                     ZoneSnapshot,
                     timestamp=timestamp,
-                    name=name,
+                    name=area.name,
 
                     room_t=room_t,
                     room_rh=room_rh,
@@ -75,7 +76,7 @@ def take_plant_snapshot(
 
                     act_state=valve_state,
                 )
-                zone_snapshots.append(zone_snapshot)
+                zone_snapshots[ area.name ] = zone_snapshot
             except TypeError as ex:
                 # Parametri mancanti/extra o mismatch firma costruttore
                 _LOGGER.warning("Error creating ZoneSnapshot for area %s: %s", name, ex, exc_info=True)
@@ -87,7 +88,7 @@ def take_plant_snapshot(
 
         return zone_snapshots
 
-    def _build_pdc_snapshot(runtime_config: RuntimeConfig) -> PDCSnapshot | None:
+    def _build_pdc_snapshot(runtime_config: RuntimeConfig, ts: datetime) -> PDCSnapshot | None:
 
         radiant: RadiantConfig | None = runtime_config.climate.devices.radiant
         if radiant is None:
@@ -96,7 +97,7 @@ def take_plant_snapshot(
         try:
             pdc_snapshot: PDCSnapshot = make_class(
                 PDCSnapshot,
-                timestamp=now_utc(),
+                timestamp=ts,
                 fm_power_on=as_bool(get_entity_value(entities_state, radiant.fm_power)) or False,
                 power_on=as_bool(get_entity_value(entities_state, radiant.power)) or False,
                 device_mode=as_int(get_entity_value(entities_state, radiant.mode.actuator)),
@@ -120,7 +121,7 @@ def take_plant_snapshot(
             _LOGGER.exception("Unexpected error creating PDCSnapshot %s", ex)
             return None
 
-    def _build_supply_unit_snapshot(runtime_config: RuntimeConfig) -> SupplyUnitSnapshot | None:
+    def _build_supply_unit_snapshot(runtime_config: RuntimeConfig, ts: datetime) -> SupplyUnitSnapshot | None:
 
         supply_unit: SupplyUnitsConfig | None = runtime_config.climate.devices.supply_units
         if supply_unit is None:
@@ -129,7 +130,7 @@ def take_plant_snapshot(
         try:
             supply_unic_snapshot: SupplyUnitSnapshot = make_class(
                 SupplyUnitSnapshot,
-                timestamp=now_utc(),
+                timestamp=ts,
                 direct_su_power_on=as_bool(get_entity_value(entities_state, supply_unit.direct_supply_unit)) or False,
                 adjustable_su_power_on=as_bool(get_entity_value(entities_state, supply_unit.adjustable_supply_unit)) or False,
                 three_point_mixing_valve=as_int(get_entity_value(entities_state, supply_unit.three_point_mixing_valve)),
@@ -150,7 +151,7 @@ def take_plant_snapshot(
             _LOGGER.exception("Unexpected error creating SupplyUnitSnapshot %s", ex)
             return None
 
-    def _build_vmc_snapshot(runtime_config: RuntimeConfig) -> VMCSnapshot | None:
+    def _build_vmc_snapshot(runtime_config: RuntimeConfig, ts: datetime) -> VMCSnapshot | None:
 
         vmc: VMCConfig | None = runtime_config.climate.devices.vmc
         if vmc is None:
@@ -159,7 +160,7 @@ def take_plant_snapshot(
         try:
             vmc_snapshot: VMCSnapshot = make_class(
                 VMCSnapshot,
-                timestamp=now_utc(),
+                timestamp=ts,
                 power_on=as_bool(get_entity_value(entities_state, vmc.power)) or False,
                 t_setpoint=as_float(get_entity_value(entities_state, vmc.t_setpoint)),
                 rh_setpoint=as_float(get_entity_value(entities_state, vmc.h_setpoint)),
@@ -209,9 +210,9 @@ def take_plant_snapshot(
 
     return make_class(
         PlantSnapshot,
-        timestamp=now_utc(),
+        timestamp=timestamp,
         season=season,
-        zones=_build_zones_snapshot(runtime_config),
+        zones=_build_zones_snapshot(runtime_config, timestamp),
 
         mean_apt_t=as_float(get_entity_value(entities_state, runtime_config.climate.mean_apt.temperature)),
         mean_apt_rh=as_float(get_entity_value(entities_state, runtime_config.climate.mean_apt.humidity)),
@@ -221,9 +222,9 @@ def take_plant_snapshot(
         outdoor_t=as_float(get_entity_value(entities_state, terrace_area.sensors.temperature)) if terrace_area else None,
         outdoor_rh=as_float(get_entity_value(entities_state, terrace_area.sensors.humidity)) if terrace_area else None,
 
-        pdc=_build_pdc_snapshot(runtime_config),
-        supply_unit=_build_supply_unit_snapshot(runtime_config),
-        vmc=_build_vmc_snapshot(runtime_config),
+        pdc=_build_pdc_snapshot(runtime_config, timestamp),
+        supply_unit=_build_supply_unit_snapshot(runtime_config, timestamp),
+        vmc=_build_vmc_snapshot(runtime_config, timestamp),
 
         home_windows_state=as_bool(get_entity_value(entities_state, runtime_config.climate.home_windows_state)) or False,
         presence_vacation=as_bool(get_entity_value(entities_state, runtime_config.climate.scenarios.vacation)) or False,

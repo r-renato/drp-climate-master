@@ -3,8 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterable, Optional
+import logging
+
+from ...helpers.utils import pad
 
 from .season import SeasonState
+
+_LOGGER = logging.getLogger(__name__)
 
 @dataclass(slots=True)
 class ZoneSnapshot:
@@ -83,7 +88,7 @@ class ZoneSnapshot:
     flow_t: Optional[float] = None
     return_t: Optional[float] = None
 
-    act_state: Optional[bool] = None  # ultimo comando all’attuatore (on/off)
+    act_state: Optional[bool] | None = None  # ultimo comando all’attuatore (on/off)
 
 
 @dataclass(slots=True)
@@ -378,7 +383,6 @@ class PlantSnapshot:
     outdoor_t: Optional[float] = None
     outdoor_rh: Optional[float] = None
 
-
     vmc: Optional[VMCSnapshot] = None
     pdc: Optional[PDCSnapshot] = None
     supply_unit: Optional[SupplyUnitSnapshot] = None
@@ -421,3 +425,136 @@ class PlantSnapshot:
         if not self.zones:
             return []
         return self.zones.keys()
+
+    def __str__(self) -> str:
+
+        # --- helper di formattazione compatti e robusti ---
+        def fnum(x, nd=1):
+            return f"{x:.{nd}f}" if x is not None else "-"
+
+        def fbool(b, on="on", off="off"):
+            return on if b is True else (off if b is False else "-")
+
+        # --- parti comuni/top-level ---
+        ts = self.timestamp.isoformat()
+
+        # --- composizione finale one-line ---
+        lines = [
+            f"Timestamp            :: {ts}",
+            f"  Season             :: {self.season.season.value if self.season else '-'}",
+            f"  Total days         :: {self.season.days if self.season else '-'}",
+            f"  Days passed        :: {self.season.passed if self.season else '-'}",
+            f"  Days remaining     :: {self.season.remaining if self.season else '-'}",
+            f"  Selected override  :: {self.season.overridden.value if self.season else '-'}",
+            f"  Weather anomaly    :: {self.season.weather_anomaly if self.season else '-'}",
+            f"------------------------------------------------------------------",
+        ]
+
+        lines += [
+            f"Zones                :: {len(self.zones) if self.zones else 0}",
+        ]
+
+        if self.zones:
+            for z in self.zones.values():
+                # _LOGGER.debug("TEST Processing area %s", z)
+                s = f":: [T:{fnum(z.room_t)}°C RH:{fnum(z.room_rh,0)}% DP:{fnum(z.room_dp)}°C HI:{fnum(z.room_hi)}°C]"
+                lines += [
+                    f"  {pad(z.name, width=16)}   "
+                    f"{pad(s, width=38)}   -   "
+                    f"Flow:{fnum(z.flow_t)}°C Ret:{fnum(z.return_t)}°C Valve:{fbool(z.act_state)}"
+                ]
+
+        lines += [
+            f"Indoor  means        :: [T:{fnum(self.mean_apt_t)}°C RH:{fnum(self.mean_apt_rh,0)}% " 
+            f"DP:{fnum(self.mean_apt_dp)}°C HI:{fnum(self.mean_apt_hi)}°C]",
+            f"Outdoor means        :: [T:{fnum(self.outdoor_t)}°C RH:{fnum(self.outdoor_rh,0)}%]",
+            f"------------------------------------------------------------------",
+        ]
+
+        lines += [
+            f"Home windows stat    :: {fbool(self.home_windows_state, 'Some Open', 'All Closed')}",
+            f"Vacation             :: {fbool(self.presence_vacation, 'Yes', 'No')}",
+            f"Nobody's in          :: {fbool(self.presence_nobodysin, 'True', 'False')}",
+            f"------------------------------------------------------------------",
+        ]
+
+        lines += [
+            f"PDC",
+            f"  FM power           :: {fbool(self.pdc.fm_power_on, 'On', 'Off') if self.pdc else '-'} ",
+            f"  Device Power       :: {fbool(self.pdc.power_on) if self.pdc else '-'} ",
+            f"  Mode               :: {self.pdc.device_mode if self.pdc else '-'} ",
+            f"  WOT-Heat           :: {fnum(self.pdc.wot_heat) if self.pdc else '-'}°C ",
+            f"  ΔT-Heat            :: {fnum(self.pdc.delta_t_heat) if self.pdc else '-'}°C ",
+            f"  WOT-Cool           :: {fnum(self.pdc.wot_cool) if self.pdc else '-'}°C ",
+            f"  ΔT-Cool            :: {fnum(self.pdc.delta_t_cool) if self.pdc else '-'}°C ",
+            f"  In                 :: {fnum(self.pdc.sensor_t_water_in_pe) if self.pdc else '-'}°C ",
+            f"  Out                :: {fnum(self.pdc.sensor_t_water_out_pe) if self.pdc else '-'}°C ",
+            f"  MinOn              :: {fnum(self.pdc.minutes_power_on,0) if self.pdc else '-'}min ",
+            f"  MinOff             :: {fnum(self.pdc.minutes_power_off,0) if self.pdc else '-'}min",
+            f"------------------------------------------------------------------",
+        ]
+
+        lines += [
+            f"Supply Unit",
+            f"  Direct Device Power:: {fbool(self.supply_unit.direct_su_power_on, 'On', 'Off') if self.supply_unit else '-'} ",
+            f"  Direct Supply Flow :: {fnum(self.supply_unit.sensor_direct_temp_system_supply) if self.supply_unit else '-'}°C ",
+            f"  Direct Return Flow :: {fnum(self.supply_unit.sensor_adjustable_temp_system_return) if self.supply_unit else '-'}°C ",
+            f"  Adjust Device Power:: {fbool(self.supply_unit.adjustable_su_power_on, 'On', 'Off') if self.supply_unit else '-'} ",
+            f"  3-pt Valve         :: {self.supply_unit.three_point_mixing_valve if self.supply_unit else '-'} ",
+            f"  Adj Supply         :: {fnum(self.supply_unit.sensor_adjustable_temp_system_supply) if self.supply_unit else '-'}°C ",
+            f"  Adj Return         :: {fnum(self.supply_unit.sensor_adjustable_temp_system_return) if self.supply_unit else '-'}°C ",
+            f"  Boiler Supply      :: {fnum(self.supply_unit.sensor_boiler_temp_system_supply) if self.supply_unit else '-'}°C ",
+            f"  Boiler Return      :: {fnum(self.supply_unit.sensor_boiler_temp_system_return) if self.supply_unit else '-'}°C ",
+            f"------------------------------------------------------------------",
+        ]
+
+        lines += [
+            f"VMC",
+            f"  Device Power       :: {fbool(self.vmc.power_on) if self.vmc else '-'} ",
+            f"  T-Setpoint         :: {fnum(self.vmc.t_setpoint) if self.vmc else '-'}°C ",
+            f"  RH-Setpoint        :: {fnum(self.vmc.rh_setpoint,0) if self.vmc else '-'}% ",
+            f"  DP-Setpoint        :: {fnum(self.vmc.t_dew_point_setpoint) if self.vmc else '-'}°C ",
+            f"  ΔDP-Setpoint       :: {fnum(self.vmc.delta_t_dew_point_setpoint) if self.vmc else '-'}°C ",
+            f"  Mode               :: {self.vmc.processing_mode if self.vmc else '-'} ",
+            f"  Req Water          :: {fbool(self.vmc.request_water) if self.vmc else '-'} ",
+            f"  Req Dehumidif      :: {fbool(self.vmc.request_dehumidification) if self.vmc else '-'} ",
+            f"  Req Heating        :: {fbool(self.vmc.request_heating) if self.vmc else '-'} ",
+            f"  Req Cooling        :: {fbool(self.vmc.request_cooling) if self.vmc else '-'} ",
+            f"  Sensor Ambient T   :: {fnum(self.vmc.sensor_t_ambient) if self.vmc else '-'}°C ",
+            f"  Sensor Ambient RH  :: {fnum(self.vmc.sensor_h_ambient,0) if self.vmc else '-'}% ",
+            f"  Sensor Water T     :: {fnum(self.vmc.sensor_t_water) if self.vmc else '-'}°C ",
+            f"  Sensor Outdoor T   :: {fnum(self.vmc.sensor_t_outdoor) if self.vmc else '-'}°C ",
+            f"  Power Today        :: {fnum(self.vmc.sensor_power_on_today,0) if self.vmc else '-'}min ",
+            f"  Power Night        :: {fnum(self.vmc.sensor_power_on_night,0) if self.vmc else '-'}min ",
+            f"  Alarm High Press   :: {fbool(self.vmc.alarm_high_pressure) if self.vmc else '-'} ",
+            f"  Alarm Dew Point    :: {fbool(self.vmc.alarm_dew_point) if self.vmc else '-'} ",
+            f"  Alarm Low Water T  :: {fbool(self.vmc.alarm_low_water_temp) if self.vmc else '-'} ",
+            f"  Alarm High Water T :: {fbool(self.vmc.alarm_high_water_temp) if self.vmc else '-'} ",
+            f"  Alarm General      :: {fbool(self.vmc.alarm_alarm) if self.vmc else '-'} ",
+            f"------------------------------------------------------------------",
+        ]
+
+        return "\n".join(lines)
+        # return (
+        #     f"Timestamp :: {ts}"
+        #     f"Season    :: {self.season}"
+        #     # "| APTmean[{apt}] | IndoorMean[{indoor}] | Outdoor[{out}] "
+        #     # "| Presence[{presence}] | Safety[{safety}] | Faults:{faults} "
+        #     # "| Zones:{zones} | {pdc} | {vmc} | {su})"
+        # ).format(
+        #     ts=ts,
+        #     season=season,
+        #     # apt=apt_part,
+        #     # indoor=indoor_part,
+        #     # out=outdoor_part,
+        #     # presence=presence_part,
+        #     # safety=safety_part,
+        #     # faults=faults_part,
+        #     # zones=zones_part,
+        #     # pdc=pdc_part,
+        #     # vmc=vmc_part,
+        #     # su=su_part,
+        # )
+
+
+
