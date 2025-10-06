@@ -28,7 +28,7 @@ class ZoneSnapshot:
 
     Attributi
     ---------
-    ts : datetime
+    timestamp : datetime
         Timestamp dell’istantanea (timezone-aware). Usato per allineare snapshot, forecast
         e scheduling del ciclo di controllo (rilevazione di dati stantii).
 
@@ -73,17 +73,12 @@ class ZoneSnapshot:
         **rate limiting** e vincoli di variazione (|Δu|).
     """
 
-    ts: datetime
-    room_t: float
-    room_rh: float
-    room_dp: float
-    room_hi: float
-
-    mean_apt_t: Optional[float]
-    mean_apt_rh: Optional[float]
-
-    out_t: float
-    out_rh: Optional[float] = None
+    timestamp: datetime
+    name: str
+    room_t: Optional[float] = None
+    room_rh: Optional[float] = None
+    room_dp: Optional[float] = None
+    room_hi: Optional[float] = None
 
     flow_t: Optional[float] = None
     return_t: Optional[float] = None
@@ -155,24 +150,24 @@ class PDCSnapshot:
 
     timestamp: datetime
     fm_power_on: bool
-    power_on: Optional[bool]
+    power_on: Optional[bool] = None
 
-    device_mode: Optional[int]
+    device_mode: Optional[int] = None
 
-    wot_heat: Optional[float]
-    delta_t_heat: Optional[float]
+    wot_heat: Optional[float] = None
+    delta_t_heat: Optional[float] = None
 
-    wot_cool: Optional[float]
-    delta_t_cool: Optional[float]
+    wot_cool: Optional[float] = None
+    delta_t_cool: Optional[float] = None
 
-    t_water_in_pe: Optional[float]
-    t_water_out_pe: Optional[float]
+    sensor_t_water_in_pe: Optional[float] = None
+    sensor_t_water_out_pe: Optional[float] = None
 
-    boiler_supply_temp: Optional[float]
-    boiler_return_temp: Optional[float]
+    # boiler_supply_temp: Optional[float]
+    # boiler_return_temp: Optional[float]
 
-    minutes_power_on: Optional[float]
-    minutes_power_off: Optional[float]
+    minutes_power_on: Optional[float] = None
+    minutes_power_off: Optional[float] = None
 
 
 @dataclass(slots=True)
@@ -238,42 +233,42 @@ class VMCSnapshot:
     """
 
     timestamp: datetime
-    power_on: Optional[bool]
+    power_on: Optional[bool] = None
 
-    t_setpoint: Optional[float]
-    rh_setpoint: Optional[float]
-    t_dew_point_setpoint: Optional[float]
-    delta_t_dew_point_setpoint: Optional[float]
+    t_setpoint: Optional[float] = None
+    rh_setpoint: Optional[float] = None
+    t_dew_point_setpoint: Optional[float] = None
+    delta_t_dew_point_setpoint: Optional[float] = None
 
-    spare_setpoint: Optional[int]
+    spare_setpoint: Optional[int] = None
 
-    act_vent_recirculation: Optional[bool]
-    act_force_heating: Optional[bool]
-    act_force_cooling: Optional[bool]
-    act_force_free_cooling: Optional[bool]
+    act_vent_recirculation: Optional[bool] = None
+    act_force_heating: Optional[bool] = None
+    act_force_cooling: Optional[bool] = None
+    act_force_free_cooling: Optional[bool] = None
 
-    processing_mode: Optional[str]
-    compressor_management: Optional[int]
-    cooling_management: Optional[int]
+    processing_mode: Optional[str] = None
+    compressor_management: Optional[int] = None
+    cooling_management: Optional[int] = None
 
-    request_water: Optional[bool]
-    request_dehumidification: Optional[bool]
-    request_heating: Optional[bool]
-    request_cooling: Optional[bool]
+    request_water: Optional[bool] = None
+    request_dehumidification: Optional[bool] = None
+    request_heating: Optional[bool] = None
+    request_cooling: Optional[bool] = None
 
-    sensor_t_ambient: Optional[float]
-    sensor_h_ambient: Optional[float]
-    sensor_t_water: Optional[float]
-    sensor_t_outdoor: Optional[float]
-    sensor_power_on_night: Optional[float]
-    sensor_power_on_today: Optional[float]
+    sensor_t_ambient: Optional[float] = None
+    sensor_h_ambient: Optional[float] = None
+    sensor_t_water: Optional[float] = None
+    sensor_t_outdoor: Optional[float] = None
 
-    alarm_high_pressure: Optional[bool]
-    alarm_dew_point: Optional[bool]
-    alarm_low_water_temp: Optional[bool]
-    alarm_high_water_temp: Optional[bool]
-    alarm_alarm: Optional[bool]
+    alarm_high_pressure: Optional[bool] = None
+    alarm_dew_point: Optional[bool] = None
+    alarm_low_water_temp: Optional[bool] = None
+    alarm_high_water_temp: Optional[bool] = None
+    alarm_alarm: Optional[bool] = None
 
+    sensor_power_on_night: Optional[float] = None
+    sensor_power_on_today: Optional[float] = None
 
 @dataclass(slots=True)
 class SupplyUnitSnapshot:
@@ -304,17 +299,17 @@ class SupplyUnitSnapshot:
     """
 
     timestamp: datetime
-    direct_su_power_on: Optional[bool]
-    adjustable_su_power_on: Optional[bool]
-    three_point_mixing_valve: Optional[int]
 
-    sensor_boiler_temp_system_supply: Optional[float]
-    sensor_boiler_temp_system_return: Optional[float]
-    sensor_adjustable_temp_system_supply: Optional[float]
-    sensor_adjustable_temp_system_return: Optional[float]
-    sensor_direct_temp_system_supply: Optional[float]
-    sensor_direct_temp_system_return: Optional[float]
+    direct_su_power_on: Optional[bool] = None
+    adjustable_su_power_on: Optional[bool] = None
+    three_point_mixing_valve: Optional[int] = None
 
+    sensor_boiler_temp_system_supply: Optional[float] = None
+    sensor_boiler_temp_system_return: Optional[float] = None
+    sensor_adjustable_temp_system_supply: Optional[float] = None
+    sensor_adjustable_temp_system_return: Optional[float] = None
+    sensor_direct_temp_system_supply: Optional[float] = None
+    sensor_direct_temp_system_return: Optional[float] = None
 
 @dataclass(slots=True)
 class PlantSnapshot:
@@ -372,14 +367,18 @@ class PlantSnapshot:
     """
 
     timestamp: datetime
-    season: SeasonState
-    zones: dict[str, ZoneSnapshot]
+    season: Optional[SeasonState] = None
+    zones: Optional[dict[str, ZoneSnapshot]] = None
 
-    out_t: Optional[float] = None
-    out_rh: Optional[float] = None
+    mean_apt_t: Optional[float] = None
+    mean_apt_rh: Optional[float] = None
+    mean_apt_dp: Optional[float] = None
+    mean_apt_hi: Optional[float] = None
 
-    dew_guard_active: Optional[bool] = None
-    free_cooling_possible: Optional[bool] = None
+    outdoor_t: Optional[float] = None
+    outdoor_rh: Optional[float] = None
+
+
     vmc: Optional[VMCSnapshot] = None
     pdc: Optional[PDCSnapshot] = None
     supply_unit: Optional[SupplyUnitSnapshot] = None
@@ -389,6 +388,8 @@ class PlantSnapshot:
     presence_vacation: Optional[bool] = None
     presence_nobodysin: Optional[bool] = None
 
+    dew_guard_active: Optional[bool] = None
+    free_cooling_possible: Optional[bool] = None
     faults: tuple[str, ...] = ()
 
     def mean_indoor_temperature(self) -> Optional[float]:
@@ -396,6 +397,8 @@ class PlantSnapshot:
         Restituisce la **media semplice** delle temperature delle zone disponibili.
         Esclude valori None; se nessuna temperatura è disponibile, restituisce None.
         """
+        if not self.zones:
+            return None
         temps = [z.room_t for z in self.zones.values() if z.room_t is not None]
         if not temps:
             return None
@@ -406,6 +409,8 @@ class PlantSnapshot:
         Restituisce la **media semplice** delle umidità relative delle zone disponibili.
         Esclude valori None; se nessuna RH è disponibile, restituisce None.
         """
+        if not self.zones:
+            return None
         humis = [z.room_rh for z in self.zones.values() if z.room_rh is not None]
         if not humis:
             return None
@@ -413,4 +418,6 @@ class PlantSnapshot:
 
     def iter_zone_names(self) -> Iterable[str]:
         """Itera i nomi delle zone presenti nello snapshot."""
+        if not self.zones:
+            return []
         return self.zones.keys()

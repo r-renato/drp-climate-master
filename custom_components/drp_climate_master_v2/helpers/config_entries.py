@@ -307,7 +307,7 @@ def build_runtime_config(entry: ConfigEntry) -> RuntimeConfig:
         weather=WeatherConfig(forecast_data=fd, historical_data=hd),
         scenarios=ScenariosConfig(**climate_cfg[CONF_SCENARIOS]),
         temperature_unit=climate_cfg.get(CONF_TEMPERATURE_UNIT, DEFAULT_TEMP_UNIT),
-        home_mean=SensorPair("", "")
+        mean_apt=SensorPair("", "")
     )
 
     caps = PlantCapabilities(

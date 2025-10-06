@@ -14,6 +14,7 @@ from homeassistant.const import PERCENTAGE, EVENT_HOMEASSISTANT_STARTED
 
 from ..domain.models.runtime_schema import AreaConfig, RuntimeConfig
 
+from ..helpers.plant import take_plant_snapshot
 from ..helpers.logger import log_debug, log_info, log_warning
 
 from ..domain.models.season import SeasonState
@@ -63,6 +64,7 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # _LOGGER.debug("Runtime config %s", self._runtime)
 
         eids = collect_entity_ids_for_state_changes(self._runtime)
+        log_debug(_LOGGER, "Subscribing state changes for %d", eids)
         # Conserva l'unsubscribe per lo stop/unload
         self._unsub_state_changes = subscribe_entity_state_changes(
             self._hass, callback=self.entity_changed, entity_ids=eids
@@ -122,7 +124,7 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             setattr(area_cfg.sensors, attribute, sensordata.entity_id)
 
         for attribute, sensor in home_unique_ids_store.items():
-            setattr(self._runtime.climate.home_mean, attribute, sensor.entity_id)
+            setattr(self._runtime.climate.mean_apt, attribute, sensor.entity_id)
             log_info(_LOGGER, "Add %s for Home mean '%s' in RuntimeConfig.", attribute, sensor.entity_id)
 
     # ----------------- Accesso allo store condiviso ----------------- #
@@ -429,7 +431,13 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # }
             # await self._async_temp_test_weater()
             self._season_data = await self._season_detector.detect()
+            plat_snapshot = take_plant_snapshot(
+                self._runtime,
+                self._season_data,
+                self._entities_state,
+            )
             log_debug(_LOGGER, "\n%s", self._season_data)
+            log_debug(_LOGGER, "\n%s", plat_snapshot)
 
             # self._debug_dump_entities_state()
 

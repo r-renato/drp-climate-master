@@ -9,10 +9,12 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple, Literal, cast
 
 from homeassistant.util import dt as dt_util
 
+from ..domain.models.season import SeasonState
+
 from ..helpers.logger import log_debug
 
 from ..weather.provider import WeatherForecastProvider, WeatherHistoricalProvider
-from ..domain.models import SeasonState
+
 from ..domain.enums import Seasons
 
 _LOGGER = logging.getLogger(__name__)

@@ -22,6 +22,9 @@ class AreaConfig:
     thermal_collector_valve_switch: Optional[str] = None
     mq: Optional[float] = None
 
+    @staticmethod
+    def find_area(areas: list[AreaConfig], name: str) -> Optional[AreaConfig]:
+        return next((a for a in areas if a.name == name), None)
 # ---- Supply units -------------------------------------------------------
 @dataclass(frozen=True)
 class SupplyUnitSensors:
@@ -173,7 +176,7 @@ class ClimateConfig:
     weather: WeatherConfig
     scenarios: ScenariosConfig
     temperature_unit: str
-    home_mean: Optional[SensorPair]
+    mean_apt: SensorPair
 
 # ======================================================
 # Runtime

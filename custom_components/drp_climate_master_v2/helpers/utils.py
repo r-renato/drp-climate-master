@@ -1,10 +1,12 @@
 #
 from __future__ import annotations
 
+from dataclasses import is_dataclass, fields as dc_fields, MISSING
+from inspect import Parameter, signature
 import math
 import re
 from decimal import Decimal
-from typing import Any
+from typing import TypeVar, Type, Any
 
 from homeassistant.core import State as HAState
 from homeassistant.const import STATE_UNKNOWN, STATE_UNAVAILABLE
@@ -284,8 +286,121 @@ def computed_float_or_none(
     return x
 
 
+T = TypeVar("T")
+def make_class(cls: Type[T], /, *, drop_none: bool = True, strict: bool = True, **values: Any) -> T:
+    """
+    Crea un'istanza della classe ``cls`` usando solo i kwargs compatibili, con
+    possibilità di **filtrare i valori None** e **validare** campi/argomenti richiesti.
 
+    La funzione supporta sia:
+      - **dataclass**: determinazione dei campi ammessi e di quelli obbligatori
+        tramite introspezione dei metadati (``dataclasses.fields``).
+      - **classi normali**: ispezione della ``__init__`` signature per validare
+        argomenti richiesti e individuare eventuali extra non previsti.
 
+    Parametri
+    ----------
+    cls : Type[T]
+        La classe da istanziare (dataclass o classe “normale”).
+    drop_none : bool, default ``True``
+        Se ``True``, rimuove dai kwargs le coppie con valore ``None`` prima della validazione.
+        Utile quando certi campi sono opzionali e hanno default nella classe.
+    strict : bool, default ``True``
+        Se ``True``, segnala come errore eventuali kwargs **non previsti** dalla classe.
+        - Per **dataclass**, gli extra non compaiono tra i ``fields``.
+        - Per **classi normali**, gli extra sono consentiti solo se la signature di
+          ``__init__`` accetta ``**kwargs``; altrimenti viene sollevato ``TypeError``.
+    **values : Any
+        I kwargs da passare al costruttore di ``cls``. Possono includere campi opzionali
+        con ``None`` (che verranno rimossi se ``drop_none=True``).
+
+    Ritorna
+    -------
+    T
+        L'istanza creata di tipo ``cls``.
+
+    Solleva
+    -------
+    TypeError
+        - Se **mancano** campi/argomenti **obbligatori** (dataclass: campi senza default;
+          classi normali: parametri senza default nella signature).
+        - Se sono presenti kwargs **non previsti** e ``strict=True`` (salvo che la
+          signature consenta ``**kwargs`` per classi normali).
+
+    Note
+    ----
+    - La funzione passa **solo argomenti per parola chiave** al costruttore.
+      Parametri posizionali (``*args``) non sono composti da questa utility.
+    - Il filtro su ``None`` usa ``is not None``: valori falsy come ``0``, ``0.0`` e
+      ``False`` **non** vengono rimossi.
+    - Per dataclass, un campo è considerato obbligatorio se il suo ``default`` è
+      ``MISSING`` **e** il suo ``default_factory`` è ``MISSING``.
+
+    Esempi
+    -------
+    Dataclass:
+    >>> from dataclasses import dataclass
+    >>> @dataclass
+    ... class Snap:
+    ...     ts: int
+    ...     t: float | None = None
+    ...     active: bool = False
+    ...
+    >>> make_class(Snap, ts=123, t=None, active=True)
+    Snap(ts=123, t=None, active=True)
+
+    Classe normale:
+    >>> class C:
+    ...     def __init__(self, x, y=0, *, z):
+    ...         self.x, self.y, self.z = x, y, z
+    ...
+    >>> make_class(C, x=1, z=3, y=None)   # y=None viene rimosso se drop_none=True
+    <__main__.C object at ...>
+    """
+    if drop_none:
+        values = {k: v for k, v in values.items() if v is not None}
+
+    if is_dataclass(cls):
+        # --- dataclass: conosciamo i campi e quelli obbligatori
+        allowed = {f.name for f in dc_fields(cls)}
+        cleaned = {k: v for k, v in values.items() if k in allowed}
+
+        required = {
+            f.name for f in dc_fields(cls)
+            if f.default is MISSING and f.default_factory is MISSING
+        }
+        missing = required - cleaned.keys()
+        if missing:
+            raise TypeError(f"{cls.__name__}: missing required fields {sorted(missing)}")
+
+        if strict and (extra := set(values) - allowed):
+            raise TypeError(f"{cls.__name__}: unexpected fields {sorted(extra)}")
+
+        return cls(**cleaned)  # type: ignore[arg-type]
+
+    # --- classe "normale": ispeziona la signature di __init__
+    sig = signature(cls)
+    params = {n: p for n, p in sig.parameters.items() if n != "self"}
+    accepts_kwargs = any(p.kind == Parameter.VAR_KEYWORD for p in params.values())
+
+    if strict and not accepts_kwargs:
+        extra = set(values) - set(params)
+        if extra:
+            raise TypeError(f"{cls.__name__}: unexpected args {sorted(extra)}")
+
+    required = {
+        n for n, p in params.items()
+        if p.kind in (Parameter.POSITIONAL_OR_KEYWORD, Parameter.KEYWORD_ONLY)
+        and p.default is Parameter.empty
+    }
+    missing = required - set(values)
+    if missing:
+        raise TypeError(f"{cls.__name__}: missing required args {sorted(missing)}")
+
+    if not accepts_kwargs:
+        values = {k: v for k, v in values.items() if k in params}
+
+    return cls(**values)
 
 
 
