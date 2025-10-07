@@ -111,7 +111,7 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
         self._unsub_hastarted_event = hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, self._on_started)
-        _LOGGER.debug("ClimateCoordinator initialized. Update each %s seconds", self._runtime.update_interval)
+        _LOGGER.debug("ClimateCoordinator initialized (%s). Update each %s seconds", id(self), self._runtime.update_interval)
 
     @callback
     def _on_started(self, event: Event):

@@ -97,6 +97,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 hass.config_entries.async_remove(entry.entry_id)
             )
             return True
+    else:
+        redundant_imports = [
+            existing
+            for existing in hass.config_entries.async_entries(DOMAIN)
+            if existing.entry_id != entry.entry_id
+            and existing.source == SOURCE_IMPORT
+            and not existing.disabled_by
+        ]
+        for redundant in redundant_imports:
+            _LOGGER.info(
+                "%s: rimuovo entry import %s in favore dell'entry UI %s.",
+                DOMAIN,
+                redundant.entry_id,
+                entry.entry_id,
+            )
+            removed = await hass.config_entries.async_remove(redundant.entry_id)
+            if not removed:
+                _LOGGER.warning(
+                    "%s: impossibile rimuovere l'entry import %s.",
+                    DOMAIN,
+                    redundant.entry_id,
+                )
 
     # Istanzia e avvia il Coordinator legato a questo entry
     coordinator: ClimateCoordinator = ClimateCoordinator(hass=hass, entry=entry)
