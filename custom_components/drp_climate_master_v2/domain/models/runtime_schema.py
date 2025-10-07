@@ -6,7 +6,7 @@ from datetime import timedelta
 from typing import Optional, List
 
 # ---- Aree ---------------------------------------------------------------
-@dataclass(frozen=False)
+@dataclass(frozen=False, slots=True)
 class SensorPair:
     temperature: str
     humidity: str

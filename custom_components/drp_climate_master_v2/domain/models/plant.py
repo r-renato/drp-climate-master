@@ -5,6 +5,8 @@ from datetime import datetime
 from typing import Iterable, Optional
 import logging
 
+from ...domain.models.runtime_schema import SensorPair
+
 from ...helpers.utils import pad
 
 from .season import SeasonState
@@ -80,10 +82,8 @@ class ZoneSnapshot:
 
     timestamp: datetime
     name: str
-    room_t: Optional[float] = None
-    room_rh: Optional[float] = None
-    room_dp: Optional[float] = None
-    room_hi: Optional[float] = None
+
+    sensors: Optional[SensorPair] = None
 
     flow_t: Optional[float] = None
     return_t: Optional[float] = None
@@ -375,13 +375,8 @@ class PlantSnapshot:
     season: Optional[SeasonState] = None
     zones: Optional[dict[str, ZoneSnapshot]] = None
 
-    mean_apt_t: Optional[float] = None
-    mean_apt_rh: Optional[float] = None
-    mean_apt_dp: Optional[float] = None
-    mean_apt_hi: Optional[float] = None
-
-    outdoor_t: Optional[float] = None
-    outdoor_rh: Optional[float] = None
+    mean_apt: Optional[SensorPair] = None
+    outdoor: Optional[SensorPair] = None
 
     vmc: Optional[VMCSnapshot] = None
     pdc: Optional[PDCSnapshot] = None
@@ -396,29 +391,29 @@ class PlantSnapshot:
     free_cooling_possible: Optional[bool] = None
     faults: tuple[str, ...] = ()
 
-    def mean_indoor_temperature(self) -> Optional[float]:
-        """
-        Restituisce la **media semplice** delle temperature delle zone disponibili.
-        Esclude valori None; se nessuna temperatura è disponibile, restituisce None.
-        """
-        if not self.zones:
-            return None
-        temps = [z.room_t for z in self.zones.values() if z.room_t is not None]
-        if not temps:
-            return None
-        return sum(temps) / len(temps)
+    # def mean_indoor_temperature(self) -> Optional[float]:
+    #     """
+    #     Restituisce la **media semplice** delle temperature delle zone disponibili.
+    #     Esclude valori None; se nessuna temperatura è disponibile, restituisce None.
+    #     """
+    #     if not self.zones:
+    #         return None
+    #     temps = [z.room_t for z in self.zones.values() if z.room_t is not None]
+    #     if not temps:
+    #         return None
+    #     return sum(temps) / len(temps)
 
-    def mean_indoor_humidity(self) -> Optional[float]:
-        """
-        Restituisce la **media semplice** delle umidità relative delle zone disponibili.
-        Esclude valori None; se nessuna RH è disponibile, restituisce None.
-        """
-        if not self.zones:
-            return None
-        humis = [z.room_rh for z in self.zones.values() if z.room_rh is not None]
-        if not humis:
-            return None
-        return sum(humis) / len(humis)
+    # def mean_indoor_humidity(self) -> Optional[float]:
+    #     """
+    #     Restituisce la **media semplice** delle umidità relative delle zone disponibili.
+    #     Esclude valori None; se nessuna RH è disponibile, restituisce None.
+    #     """
+    #     if not self.zones:
+    #         return None
+    #     humis = [z.room_rh for z in self.zones.values() if z.room_rh is not None]
+    #     if not humis:
+    #         return None
+    #     return sum(humis) / len(humis)
 
     def iter_zone_names(self) -> Iterable[str]:
         """Itera i nomi delle zone presenti nello snapshot."""
@@ -457,19 +452,21 @@ class PlantSnapshot:
         if self.zones:
             for z in self.zones.values():
                 # _LOGGER.debug("TEST Processing area %s", z)
-                s = f":: [T:{fnum(z.room_t)}°C RH:{fnum(z.room_rh,0)}% DP:{fnum(z.room_dp)}°C HI:{fnum(z.room_hi)}°C]"
-                lines += [
-                    f"  {pad(z.name, width=16)}   "
-                    f"{pad(s, width=38)}   -   "
-                    f"Flow:{fnum(z.flow_t)}°C Ret:{fnum(z.return_t)}°C Valve:{fbool(z.act_state)}"
-                ]
+                if z.sensors:
+                    s = f":: [T:{fnum(z.sensors.temperature)}°C RH:{fnum(z.sensors.humidity,0)}% DP:{fnum(z.sensors.dew_point)}°C HI:{fnum(z.sensors.heat_index)}°C]"
+                    lines += [
+                        f"  {pad(z.name, width=16)}   "
+                        f"{pad(s, width=38)}   -   "
+                        f"Flow:{fnum(z.flow_t)}°C Ret:{fnum(z.return_t)}°C Valve:{fbool(z.act_state)}"
+                    ]
 
-        lines += [
-            f"Indoor  means        :: [T:{fnum(self.mean_apt_t)}°C RH:{fnum(self.mean_apt_rh,0)}% " 
-            f"DP:{fnum(self.mean_apt_dp)}°C HI:{fnum(self.mean_apt_hi)}°C]",
-            f"Outdoor means        :: [T:{fnum(self.outdoor_t)}°C RH:{fnum(self.outdoor_rh,0)}%]",
-            f"------------------------------------------------------------------",
-        ]
+        if self.mean_apt and self.outdoor:
+            lines += [
+                f"Indoor  means        :: [T:{fnum(self.mean_apt.temperature)}°C RH:{fnum(self.mean_apt.humidity,0)}% " 
+                f"DP:{fnum(self.mean_apt.dew_point)}°C HI:{fnum(self.mean_apt.heat_index)}°C]",
+                f"Outdoor means        :: [T:{fnum(self.outdoor.temperature)}°C RH:{fnum(self.outdoor.humidity,0)}%]",
+                f"------------------------------------------------------------------",
+            ]
 
         lines += [
             f"Home windows stat    :: {fbool(self.home_windows_state, 'Some Open', 'All Closed')}",

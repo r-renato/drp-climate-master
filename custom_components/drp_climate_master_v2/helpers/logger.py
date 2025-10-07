@@ -119,13 +119,26 @@ class PrefixedLogger:
         except TypeError:
             logger.warning(prefix + msg, *args, **kwargs)
 
+    @staticmethod
+    def exc_one_line(e: BaseException) -> str:
+        """Rappresentazione in una riga di un'eccezione con file:line del punto di lancio."""
+        tb = e.__traceback__
+        while tb and tb.tb_next:
+            tb = tb.tb_next
+        if tb:
+            code = tb.tb_frame.f_code
+            return f"{type(e).__name__}: {e} @ {code.co_filename}:{tb.tb_lineno} in {code.co_name}"
+        return f"{type(e).__name__}: {e}"
+
 # (Opzionale) API compatibile con le vecchie funzioni:
 def log_debug(logger: logging.Logger, msg: str, *args, **kwargs) -> None:
     PrefixedLogger.log_debug(logger, msg, *args, **kwargs)
-
 
 def log_info(logger: logging.Logger, msg: str, *args, **kwargs) -> None:
     PrefixedLogger.log_info(logger, msg, *args, **kwargs)
 
 def log_warning(logger: logging.Logger, msg: str, *args, **kwargs) -> None:
     PrefixedLogger.log_warning(logger, msg, *args, **kwargs)
+
+def exc_one_line(e: BaseException) -> str:
+    return PrefixedLogger.exc_one_line(e)

@@ -65,9 +65,9 @@ async def async_setup_entry(
     area_unique_ids_store = store.setdefault("area_unique_ids", {})
     home_unique_ids_store = store.setdefault("home_unique_ids", {})
 
-    def _set_area_id(area: str, attribute: str, sensor: Any) -> None:
+    def _set_area_id(area: str, data: dict[str, Any]) -> None:
         """..."""
-        area_unique_ids_store.setdefault(area, {attribute: sensor})
+        area_unique_ids_store.setdefault(area, data)
 
     if coordinator is None:
         log_warning(_LOGGER,
@@ -78,6 +78,7 @@ async def async_setup_entry(
 
     entities: List[SensorEntity] = []
     try:
+        area_data: dict[str, Any] = {}
         for cfg in coordinator.build_slave_sensor_defs():
             log_info(_LOGGER, "Try to add %s", cfg)
             if cfg["type"] == "DewpointSensor":
@@ -90,7 +91,8 @@ async def async_setup_entry(
                     temperature_unit=cfg["unit"],
                 )
                 # unique_id[sensor.unique_id] = None
-                _set_area_id(cfg.get("area", "default"), "dew_point", sensor)
+                area_data["dew_point"] = sensor
+                # _set_area_id(cfg.get("area", "default"), "dew_point", sensor)
                 entities.append(sensor)
 
             if cfg["type"] == "HeatIndexSensor":
@@ -103,7 +105,8 @@ async def async_setup_entry(
                     temperature_unit=cfg["unit"],
                 )
                 # unique_id[sensor.unique_id] = None
-                _set_area_id(cfg.get("area", "default"), "heat_index", sensor)
+                area_data["heat_index"] = sensor
+                # _set_area_id(cfg.get("area", "default"), "heat_index", sensor)
                 entities.append(sensor)
 
             if cfg["type"] == "CurrentTemperatureSensor":
@@ -160,8 +163,13 @@ async def async_setup_entry(
                 home_unique_ids_store["heat_index"] = sensor
                 entities.append(sensor)
 
+            _set_area_id(cfg.get("area", "default"), area_data)
+
         log_debug(_LOGGER, "area_unique_ids_store %s", area_unique_ids_store)
         log_debug(_LOGGER, "home_unique_ids_store %s", home_unique_ids_store)
+
+        setup_unique_ids_store = store.setdefault("setup_unique_ids", True)
+        log_debug(_LOGGER, "setup_unique_ids_store %s", setup_unique_ids_store)
 
     except Exception as ex:  # noqa: BLE001
         _LOGGER.exception("Errore durante creazione sensori dew-point: %s", ex)
@@ -329,10 +337,11 @@ class BaseSensor(
         if st is None:
             return
 
-        domain_store = self.hass.data.setdefault(DOMAIN, {})
-        entry_store = domain_store.setdefault(self._entry.entry_id, {})
-        entities_state: dict[str, Any] = entry_store.setdefault(ENTITIES_STATE, {})
-        entities_state[self.entity_id] = st
+        # domain_store = self.hass.data.setdefault(DOMAIN, {})
+        # entry_store = domain_store.setdefault(self._entry.entry_id, {})
+        # entities_state: dict[str, Any] = entry_store.setdefault(ENTITIES_STATE, {})
+        # entities_state[self.entity_id] = st
+        self._entities_state[self.entity_id] = st
 
     @callback
     def _handle_coordinator_update(self) -> None:

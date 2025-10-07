@@ -3,17 +3,23 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from dataclasses import fields, replace
 import logging
 import json
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, Event, EventStateChangedData, callback
+from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.const import PERCENTAGE, EVENT_HOMEASSISTANT_STARTED
 
+from ..domain.models.plant import PlantSnapshot
 
-from ..domain.models.runtime_schema import AreaConfig, RuntimeConfig
+from ..strategies.season_threshold import SeasonThresholdStrategy
+
+
+from ..domain.models.runtime_schema import AreaConfig, RuntimeConfig, SensorPair
 from ..domain.models.season import SeasonState
 
 from ..helpers.plant import take_plant_snapshot
@@ -61,6 +67,7 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Config di runtime e subscribe ai cambi di stato
         self._runtime: RuntimeConfig = build_runtime_config(entry)
+        self._runtime_2 = None  # per swap atomico
         # _LOGGER.debug("Runtime config %s", self._runtime)
 
         eids = collect_entity_ids_for_state_changes(self._runtime)
@@ -103,29 +110,95 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             update_interval=self._runtime.update_interval,  # loop SLOW
         )
 
-        self._unsub_hastarted_event = hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, self._async_complete_runtime_config)
+        self._unsub_hastarted_event = hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, self._on_started)
         _LOGGER.debug("ClimateCoordinator initialized. Update each %s seconds", self._runtime.update_interval)
 
-    async def _async_complete_runtime_config(self, event: Event) -> None:
-        def _find_area(areas: list[AreaConfig], name: str) -> Optional[AreaConfig]:
-            return next((a for a in areas if a.name == name), None)
+    @callback
+    def _on_started(self, event: Event):
+        # tra 10s esegue il tuo coroutine
+        @callback
+        def _runner(_now):
+            self._hass.async_create_task(self._async_complete_runtime_config(event))
         
-        store = self._hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {})
-        area_unique_ids_store = store.setdefault("area_unique_ids", {})
-        home_unique_ids_store = store.setdefault("home_unique_ids", {})
+        self._unsub_delayed = async_call_later(self._hass, 10, _runner)
 
-        for area, data in area_unique_ids_store.items():
-            area_cfg = _find_area(self._runtime.climate.areas, area)
-            if not area_cfg:
-                log_warning(_LOGGER, "Area '%s' non definita in RuntimeConfig; salto", area)
+    async def _async_complete_runtime_config(self, event: Event) -> None:
+
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        comp_store = self._hass.data.setdefault(DOMAIN, {})
+        store = comp_store.setdefault(self._entry.entry_id, {})
+        log_debug(_LOGGER, "setup_unique_ids_store '%s'. (RuntimeConfig)", store)
+        while True:
+            comp_store = self._hass.data.setdefault(DOMAIN, {})
+            store = comp_store.setdefault(self._entry.entry_id, {})
+            setup_unique_ids = store.setdefault("setup_unique_ids", False)
+            log_debug(_LOGGER, "setup_unique_ids_store '%s'. (RuntimeConfig)", setup_unique_ids)
+            if setup_unique_ids:
+                log_info(_LOGGER, "setup_unique_ids_store done. (RuntimeConfig)")
+                break
+
+            if (loop.time() - start) >= 60:
+                log_warning(_LOGGER, "Timeout waiting for setup_unique_ids_store (RuntimeConfig)")
+                return
+            
+            await asyncio.sleep(5)
+
+        comp_store = self._hass.data.setdefault(DOMAIN, {})
+        store = comp_store.setdefault(self._entry.entry_id, {})
+        area_unique_ids_store: dict = store.setdefault("area_unique_ids", {})
+        home_unique_ids_store: dict = store.setdefault("home_unique_ids", {})
+
+        sensorpair_fields = {f.name for f in fields(SensorPair)}
+        old_areas = self._runtime.climate.areas
+        new_areas: list[AreaConfig] = []
+        changed = False
+
+        for area_cfg in old_areas:
+            data = area_unique_ids_store.get(area_cfg.name) or {}
+            sp = area_cfg.sensors
+            updates: dict[str, str] = {}
+
+            for attr, sensordata in data.items():
+                if attr not in sensorpair_fields:
+                    log_warning(_LOGGER, "Ignoro attributo sconosciuto SensorPair.%s per area '%s'", attr, area_cfg.name)
+                    continue
+                eid = getattr(sensordata, "entity_id", None) or str(sensordata)
+                # se non vuoi sovrascrivere con None/stringhe vuote, aggiungi guardia
+                if eid and getattr(sp, attr) != eid:
+                    updates[attr] = eid
+
+            if updates:
+                new_sp = replace(sp, **updates)
+                area_cfg = replace(area_cfg, sensors=new_sp)
+                changed = True
+                log_info(_LOGGER, "Area '%s' aggiornata: %s (RuntimeConfig)", area_cfg.name, new_sp)
+
+            new_areas.append(area_cfg)
+
+        # mean_apt (home sensors)
+        mean_sp = self._runtime.climate.mean_apt
+        mean_updates: dict[str, str] = {}
+        for attr, sensor in (home_unique_ids_store or {}).items():
+            if attr not in sensorpair_fields:
+                log_warning(_LOGGER, "Ignoro attributo sconosciuto SensorPair.%s per mean_apt", attr)
                 continue
+            eid = getattr(sensor, "entity_id", None) or str(sensor)
+            if eid and getattr(mean_sp, attr) != eid:
+                mean_updates[attr] = eid
 
-            attribute, sensordata = next(iter(data.items()))
-            setattr(area_cfg.sensors, attribute, sensordata.entity_id)
+        new_mean = replace(mean_sp, **mean_updates) if mean_updates else mean_sp
+        if mean_updates:
+            changed = True
+            log_info(_LOGGER, "Aggiornato mean_apt: %s", new_mean)
 
-        for attribute, sensor in home_unique_ids_store.items():
-            setattr(self._runtime.climate.mean_apt, attribute, sensor.entity_id)
-            log_info(_LOGGER, "Add %s for Home mean '%s' in RuntimeConfig.", attribute, sensor.entity_id)
+        if changed:
+            new_climate = replace(self._runtime.climate, areas=new_areas, mean_apt=new_mean)
+            new_runtime = replace(self._runtime, climate=new_climate)
+            self._runtime_2 = new_runtime    # swap atomico
+
+        # log_info(_LOGGER, "RuntimeConfig: %s", self._runtime.climate.areas)
+        log_info(_LOGGER, "%s Done. (RuntimeConfig) %s", id(self), self._runtime)
 
     # ----------------- Accesso allo store condiviso ----------------- #
 
@@ -432,14 +505,36 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # await self._async_temp_test_weater()
             self._season_data = await self._season_detector.detect()
             log_debug(_LOGGER, "TEST A\n%s", self._season_data)
-            
-            plat_snapshot = take_plant_snapshot(
+            log_info(_LOGGER, "(RuntimeConfig) 33 %s %s", id(self), self._runtime_2)
+            plat_snapshot: PlantSnapshot = take_plant_snapshot(
                 self._runtime,
                 self._season_data,
                 self._entities_state,
                 now_tz(ha_timezone(self._hass)[1])
             )
             log_debug(_LOGGER, "TEST B\n%s", plat_snapshot)
+
+            # core_rooms: list[SensorPair] = []
+            # core1 = plat_snapshot.zones.get("Master Bedroom") if plat_snapshot.zones else None
+            # if core1 and core1.sensors is not None:
+            #     core_rooms.append(core1.sensors)
+
+            # # aggiungi altre zone eventuali con la stessa logica...
+
+            # if core_rooms and plat_snapshot.mean_apt and plat_snapshot.outdoor:
+            #     sts = SeasonThresholdStrategy(
+            #         season_state=self._season_data,
+            #         core_rooms=core_rooms,              # list[SensorPair]
+            #         secondary_rooms=[],
+            #         indoor_sensors=plat_snapshot.mean_apt,   # assicurati che non siano Optional
+            #         outdoor_sensors=plat_snapshot.outdoor,
+            #     )
+
+            #     await sts.compute()
+            #     thr = sts.get_threshold()
+
+            #     log_info(_LOGGER, "Computed thresholds: %s", thr)
+
 
             # self._debug_dump_entities_state()
 

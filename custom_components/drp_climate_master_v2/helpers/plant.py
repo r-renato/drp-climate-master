@@ -4,7 +4,7 @@ import logging
 from typing import List
 from datetime import datetime
 
-from .logger import log_warning
+from .logger import exc_one_line, log_debug, log_warning
 
 from .ha import get_entity_value
 
@@ -19,6 +19,7 @@ from ..domain.models.runtime_schema import (
     AreaConfig,
     RadiantConfig,
     RuntimeConfig,
+    SensorPair,
     SupplyUnitSensors,
     SupplyUnitsConfig,
     VMCConfig,
@@ -40,13 +41,15 @@ def take_plant_snapshot(
         """Helper to build a ZoneSnapshot from area configs."""
         zone_snapshots: dict[str, ZoneSnapshot] = {}
 
+        log_debug(_LOGGER, "RuntimeConfig: 22 %s", runtime_config.climate.areas)
         supply_unit_sensor: SupplyUnitSensors = runtime_config.climate.devices.supply_units.sensors
         flow_t = as_float(get_entity_value(entities_state, supply_unit_sensor.boiler_temp_system_supply))
         return_t = as_float(get_entity_value(entities_state, supply_unit_sensor.boiler_temp_system_return))
 
         areas: List[AreaConfig] = runtime_config.climate.areas
         for area in areas:
-            sensors = area.sensors
+            log_debug(_LOGGER, "RuntimeConfig: 22 %s", area.sensors)
+            sensors=area.sensors
             timestamp=ts
             name=area.name
             valve_state = None
@@ -56,30 +59,44 @@ def take_plant_snapshot(
             if area.indoor:
                 room_dp = as_float(get_entity_value(entities_state, sensors.dew_point))
                 room_hi = as_float(get_entity_value(entities_state, sensors.heat_index))
+                log_debug(_LOGGER, f"Entity ids for area {name}: T={sensors.temperature}, RH={sensors.humidity}, DP={sensors.dew_point}, HI={sensors.heat_index}")
 
             if area.radiant:
                 valve_state = as_bool(get_entity_value(entities_state, area.thermal_collector_valve_switch))
 
             try:
+                zone_sensor: SensorPair = make_class(
+                    SensorPair,
+                    temperature=room_t,
+                    humidity=room_rh,
+                    dew_point=room_dp if area.indoor else None,
+                    heat_index=room_hi if area.indoor else None,
+                )
                 zone_snapshot: ZoneSnapshot = make_class(
                     ZoneSnapshot,
                     timestamp=timestamp,
                     name=area.name,
 
-                    room_t=room_t,
-                    room_rh=room_rh,
-                    room_dp=room_dp,
-                    room_hi=room_hi,
+                    sensors=zone_sensor,
 
-                    flow_t=flow_t,
-                    return_t=return_t,
+                    flow_t=flow_t if area.radiant else None,
+                    return_t=return_t if area.radiant else None,
 
-                    act_state=valve_state,
+                    act_state=valve_state if area.radiant else None,
                 )
                 zone_snapshots[ area.name ] = zone_snapshot
             except TypeError as ex:
                 # Parametri mancanti/extra o mismatch firma costruttore
-                _LOGGER.warning("Error creating ZoneSnapshot for area %s: %s", name, ex, exc_info=True)
+                line = [
+                    f"Error creating ZoneSnapshot for area {name} - {exc_one_line(ex)}",
+                    f"room t entity: {sensors.temperature}, value: {get_entity_value(entities_state, sensors.temperature)}",
+                    f"room rh entity: {sensors.humidity}, value: {get_entity_value(entities_state, sensors.humidity)}",
+                    f"room dp entity: {sensors.dew_point}, value: {get_entity_value(entities_state, sensors.dew_point)}",
+                    f"room hi entity: {sensors.heat_index}, value: {get_entity_value(entities_state, sensors.heat_index)}",
+                    f"valve entity: {area.thermal_collector_valve_switch}, value: {get_entity_value(entities_state, area.thermal_collector_valve_switch)}",
+                ]
+                log_warning(_LOGGER, "\n".join(line))
+                # _LOGGER.warning("Error creating ZoneSnapshot for area %s: %s", name, ex, exc_info=True)
                 continue
             except Exception as ex:
                 # Qualsiasi altro errore inaspettato
@@ -206,21 +223,36 @@ def take_plant_snapshot(
             return None
         
     # --- Main logic --------------------------------------------------------
-    terrace_area = AreaConfig.find_area(runtime_config.climate.areas, "Terrace")
+    zones_snapshot: dict[str, ZoneSnapshot] =_build_zones_snapshot(runtime_config, timestamp)
+    terrace_area = zones_snapshot.get('Terrace') if zones_snapshot else None
+
+    try:
+        mean_apt: SensorPair | None = make_class(
+            SensorPair,
+            temperature=as_float(get_entity_value(entities_state, runtime_config.climate.mean_apt.temperature)),
+            humidity=as_float(get_entity_value(entities_state, runtime_config.climate.mean_apt.humidity)),
+            dew_point=as_float(get_entity_value(entities_state, runtime_config.climate.mean_apt.dew_point)),
+            heat_index=as_float(get_entity_value(entities_state, runtime_config.climate.mean_apt.heat_index)),
+        )
+    except TypeError as ex:
+        mean_apt = None
+    
+    log_debug(_LOGGER, f"zones_snapshot: {zones_snapshot}" )
+    log_debug(_LOGGER, f"terrace_area: {terrace_area}" )
+    outdoor: SensorPair = make_class(
+        SensorPair,
+        temperature=terrace_area.sensors.temperature if terrace_area and terrace_area.sensors else None,
+        humidity=terrace_area.sensors.humidity if terrace_area and terrace_area.sensors else None,
+    )
 
     return make_class(
         PlantSnapshot,
         timestamp=timestamp,
         season=season,
-        zones=_build_zones_snapshot(runtime_config, timestamp),
+        zones=zones_snapshot,
 
-        mean_apt_t=as_float(get_entity_value(entities_state, runtime_config.climate.mean_apt.temperature)),
-        mean_apt_rh=as_float(get_entity_value(entities_state, runtime_config.climate.mean_apt.humidity)),
-        mean_apt_dp=as_float(get_entity_value(entities_state, runtime_config.climate.mean_apt.dew_point)),
-        mean_apt_hi=as_float(get_entity_value(entities_state, runtime_config.climate.mean_apt.heat_index)),
-
-        outdoor_t=as_float(get_entity_value(entities_state, terrace_area.sensors.temperature)) if terrace_area else None,
-        outdoor_rh=as_float(get_entity_value(entities_state, terrace_area.sensors.humidity)) if terrace_area else None,
+        mean_apt=mean_apt,
+        outdoor=outdoor,
 
         pdc=_build_pdc_snapshot(runtime_config, timestamp),
         supply_unit=_build_supply_unit_snapshot(runtime_config, timestamp),
