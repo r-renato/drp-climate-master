@@ -382,8 +382,9 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_config_entry_first_refresh(self) -> None:
         """Primo refresh: dopo il SLOW loop, avvia il FAST loop."""
+        log_debug(_LOGGER, "Starting First refresh")
         await super().async_config_entry_first_refresh()
-        _LOGGER.debug("First refresh completed")
+        log_debug(_LOGGER, "First refresh completed")
         await self.async_start_fast_loop()
 
         

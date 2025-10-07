@@ -80,6 +80,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     from .controller.coordinator import ClimateCoordinator
     from .controller.supervisor import ClimateSupervisor
 
+    # Garantisce che lo store principale esista sempre
+    domain_store = hass.data.setdefault(DOMAIN, {})
+
     existing_entries = hass.config_entries.async_entries(DOMAIN)
     log_debug(_LOGGER,
         "%s: async_setup_entry → entry_id=%s source=%s state=%s (%d entries totali)",
@@ -160,6 +163,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     entry.entry_id,
                 )
 
+    entry_store = domain_store.get(entry.entry_id)
+    if entry_store:
+        log_debug(_LOGGER, "%s: COORDINATOR=%s", DOMAIN, entry_store.get(COORDINATOR))
+        log_debug(_LOGGER, "%s: SUPERVISOR=%s", DOMAIN, entry_store.get(SUPERVISOR))
+    if entry_store and entry_store.get(COORDINATOR) and entry_store.get(SUPERVISOR):
+        log_info(
+            _LOGGER,
+            "%s: setup entry %s già completato, riutilizzo coordinator/supervisor esistenti.",
+            DOMAIN,
+            entry.entry_id,
+        )
+        return True
+
     # Istanzia e avvia il Coordinator legato a questo entry
     log_debug(_LOGGER,
         "%s: creo ClimateCoordinator per entry %s (source=%s)",
@@ -170,17 +186,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Istanzia e avvia il Coordinator legato a questo entry
     coordinator: ClimateCoordinator = ClimateCoordinator(hass=hass, entry=entry)
+    log_debug(_LOGGER, "%s: A", DOMAIN)
     # Se il tuo coordinator espone runtime_config, popolalo in __init__ o qui
     # es: coordinator.runtime_config = build_runtime_config_from_options(entry.options)
     await coordinator.async_config_entry_first_refresh()
+    log_debug(_LOGGER, "%s: B", DOMAIN)
 
     supervisor: ClimateSupervisor = ClimateSupervisor(hass=hass, coordinator=coordinator)
+    log_debug(_LOGGER, "%s: C", DOMAIN)
     await supervisor.async_start()
+    log_debug(_LOGGER, "%s: D", DOMAIN)
 
-    hass.data[DOMAIN].setdefault(entry.entry_id, {})
-    hass.data[DOMAIN][entry.entry_id][COORDINATOR] = coordinator
-    hass.data[DOMAIN][entry.entry_id][SUPERVISOR] = supervisor
-    hass.data[DOMAIN][entry.entry_id].setdefault(ENTITIES_STATE, {})
+    if not entry_store:
+        entry_store = domain_store.setdefault(entry.entry_id, {})
+    
+    entry_store[COORDINATOR] = coordinator
+    entry_store[SUPERVISOR] = supervisor
+    entry_store.setdefault(ENTITIES_STATE, {})
+
+    log_debug(_LOGGER, "%s: 2 COORDINATOR=%s", DOMAIN, entry_store.get(COORDINATOR))
+    log_debug(_LOGGER, "%s: 2 SUPERVISOR=%s", DOMAIN, entry_store.get(SUPERVISOR))
 
     # Piattaforme (climate, sensor, ecc.)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -188,9 +213,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Reload su change delle options
     entry.async_on_unload(entry.add_update_listener(_options_updated))
 
-    _LOGGER.info("%s: setup entry '%s' completato.", DOMAIN, entry.entry_id)
+    log_info(_LOGGER, "%s: setup entry '%s' completato.", DOMAIN, entry.entry_id)
     return True
-
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Smonta piattaforme e risorse per un ConfigEntry."""
