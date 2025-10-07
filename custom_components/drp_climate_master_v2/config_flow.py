@@ -10,6 +10,7 @@ from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 from homeassistant.helpers import config_validation as cv
+from homeassistant.config_entries import SOURCE_IMPORT
 from homeassistant.const import (
     CONF_NAME,
     CONF_UNIQUE_ID,
@@ -344,6 +345,12 @@ class DrpClimateMasterConfigFlow(ConfigFlow, domain=DOMAIN):
 
         # Lista delle entry già presenti per questo dominio
         existing_entries = self._async_current_entries()
+        if any(entry.source != SOURCE_IMPORT for entry in existing_entries):
+            _LOGGER.info(
+                "%s: import YAML ignorato perché esiste già una configurazione tramite UI.",
+                DOMAIN,
+            )
+            return self.async_abort(reason="already_configured")
         existing_uids = {e.data.get(CONF_CLIMATE_UNIQUE_ID) for e in existing_entries if e.data}
 
         # Importiamo il PRIMO climate valido trovato (comportamento standard HA)

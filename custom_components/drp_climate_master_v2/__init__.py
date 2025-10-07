@@ -79,6 +79,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     from .controller.coordinator import ClimateCoordinator
     from .controller.supervisor import ClimateSupervisor
 
+    # Evita di mantenere attive più entry quando esiste già una configurazione UI.
+    if entry.source == SOURCE_IMPORT:
+        active_entries = [
+            existing
+            for existing in hass.config_entries.async_entries(DOMAIN)
+            if existing.entry_id != entry.entry_id and not existing.disabled_by
+        ]
+        if active_entries:
+            _LOGGER.info(
+                "%s: entry %s (import) ignorata perché esiste già una configurazione attiva (%s).",
+                DOMAIN,
+                entry.entry_id,
+                active_entries[0].entry_id,
+            )
+            hass.async_create_task(
+                hass.config_entries.async_remove(entry.entry_id)
+            )
+            return True
+
     # Istanzia e avvia il Coordinator legato a questo entry
     coordinator: ClimateCoordinator = ClimateCoordinator(hass=hass, entry=entry)
     # Se il tuo coordinator espone runtime_config, popolalo in __init__ o qui
