@@ -6,7 +6,7 @@ import contextlib
 from dataclasses import fields, replace
 import logging
 import json
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Callable
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, Event, EventStateChangedData, callback
@@ -110,8 +110,16 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             update_interval=self._runtime.update_interval,  # loop SLOW
         )
 
-        self._unsub_hastarted_event = hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, self._on_started)
-        _LOGGER.debug("ClimateCoordinator initialized (%s). Update each %s seconds", id(self), self._runtime.update_interval)
+        self._unsub_hastarted_event: Optional[Callable[[], None]] = hass.bus.async_listen_once(
+            EVENT_HOMEASSISTANT_STARTED, self._on_started
+        )
+        _LOGGER.debug(
+            "ClimateCoordinator initialized (id=%s) per entry %s (source=%s). Update ogni %s secondi",
+            hex(id(self)),
+            entry.entry_id,
+            entry.source,
+            self._runtime.update_interval,
+        )
 
     @callback
     def _on_started(self, event: Event):
@@ -437,6 +445,17 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if callable(unsub):
             with contextlib.suppress(Exception):
                 unsub()
+
+        unsub_started = getattr(self, "_unsub_hastarted_event", None)
+        if callable(unsub_started):
+            with contextlib.suppress(Exception):
+                unsub_started()
+            self._unsub_hastarted_event = None
+
+        if self._unsub_delayed:
+            with contextlib.suppress(Exception):
+                self._unsub_delayed()
+            self._unsub_delayed = None
 
     async def _fast_loop(self) -> None:
         """
