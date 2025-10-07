@@ -10,6 +10,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.typing import ConfigType
 
+from .helpers.logger import log_debug, log_info, log_warning
+
 from .const import ( # es.: DOMAIN="drp_climate", PLATFORMS=[Platform.CLIMATE]
     DOMAIN,
     ENTITIES_STATE,
@@ -72,12 +74,30 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # Non attendere il flow: lascia completare il setup del dominio
     return True
 
-
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Configura l'integrazione da un ConfigEntry (UI o import da YAML)."""
     # Lazy import per evitare cicli durante lo sviluppo
     from .controller.coordinator import ClimateCoordinator
     from .controller.supervisor import ClimateSupervisor
+
+    existing_entries = hass.config_entries.async_entries(DOMAIN)
+    log_debug(_LOGGER,
+        "%s: async_setup_entry → entry_id=%s source=%s state=%s (%d entries totali)",
+        DOMAIN,
+        entry.entry_id,
+        entry.source,
+        getattr(entry.state, "name", entry.state),
+        len(existing_entries),
+    )
+    for existing in existing_entries:
+        log_debug(_LOGGER,
+            "%s: entry presente → id=%s source=%s state=%s disabled_by=%s", 
+            DOMAIN,
+            existing.entry_id,
+            existing.source,
+            getattr(existing.state, "name", existing.state),
+            existing.disabled_by,
+        )
 
     # Evita di mantenere attive più entry quando esiste già una configurazione UI.
     if entry.source == SOURCE_IMPORT:
@@ -87,15 +107,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if existing.entry_id != entry.entry_id and not existing.disabled_by
         ]
         if active_entries:
-            _LOGGER.info(
+            log_info(_LOGGER,
                 "%s: entry %s (import) ignorata perché esiste già una configurazione attiva (%s).",
                 DOMAIN,
                 entry.entry_id,
                 active_entries[0].entry_id,
             )
-            hass.async_create_task(
-                hass.config_entries.async_remove(entry.entry_id)
+            log_debug(_LOGGER,
+                "%s: rimozione sincrona dell'entry import %s", DOMAIN, entry.entry_id
             )
+            removed = await hass.config_entries.async_remove(entry.entry_id)
+            if not removed:
+                log_warning(_LOGGER,
+                    "%s: impossibile rimuovere immediatamente l'entry import %s",
+                    DOMAIN,
+                    entry.entry_id,
+                )
+            else:
+                log_debug(_LOGGER,
+                    "%s: entry import %s rimossa prima dell'istanziazione del coordinator",
+                    DOMAIN,
+                    entry.entry_id,
+                )
             return True
     else:
         redundant_imports = [
@@ -106,7 +139,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             and not existing.disabled_by
         ]
         for redundant in redundant_imports:
-            _LOGGER.info(
+            log_info(_LOGGER,
                 "%s: rimuovo entry import %s in favore dell'entry UI %s.",
                 DOMAIN,
                 redundant.entry_id,
@@ -114,11 +147,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
             removed = await hass.config_entries.async_remove(redundant.entry_id)
             if not removed:
-                _LOGGER.warning(
+                log_warning(_LOGGER,
                     "%s: impossibile rimuovere l'entry import %s.",
                     DOMAIN,
                     redundant.entry_id,
                 )
+            else:
+                log_debug(_LOGGER,
+                    "%s: entry import %s rimossa durante il setup UI %s",
+                    DOMAIN,
+                    redundant.entry_id,
+                    entry.entry_id,
+                )
+
+    # Istanzia e avvia il Coordinator legato a questo entry
+    log_debug(_LOGGER,
+        "%s: creo ClimateCoordinator per entry %s (source=%s)",
+        DOMAIN,
+        entry.entry_id,
+        entry.source,
+    )
 
     # Istanzia e avvia il Coordinator legato a questo entry
     coordinator: ClimateCoordinator = ClimateCoordinator(hass=hass, entry=entry)
