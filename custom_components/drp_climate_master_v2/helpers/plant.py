@@ -41,14 +41,14 @@ def take_plant_snapshot(
         """Helper to build a ZoneSnapshot from area configs."""
         zone_snapshots: dict[str, ZoneSnapshot] = {}
 
-        log_debug(_LOGGER, "RuntimeConfig: 22 %s", runtime_config.climate.areas)
+        # log_debug(_LOGGER, "RuntimeConfig: 22 %s", runtime_config.climate.areas)
         supply_unit_sensor: SupplyUnitSensors = runtime_config.climate.devices.supply_units.sensors
         flow_t = as_float(get_entity_value(entities_state, supply_unit_sensor.boiler_temp_system_supply))
         return_t = as_float(get_entity_value(entities_state, supply_unit_sensor.boiler_temp_system_return))
 
         areas: List[AreaConfig] = runtime_config.climate.areas
         for area in areas:
-            log_debug(_LOGGER, "RuntimeConfig: 22 %s", area.sensors)
+            # log_debug(_LOGGER, "RuntimeConfig: 22 %s", area.sensors)
             sensors=area.sensors
             timestamp=ts
             name=area.name
@@ -59,7 +59,7 @@ def take_plant_snapshot(
             if area.indoor:
                 room_dp = as_float(get_entity_value(entities_state, sensors.dew_point))
                 room_hi = as_float(get_entity_value(entities_state, sensors.heat_index))
-                log_debug(_LOGGER, f"Entity ids for area {name}: T={sensors.temperature}, RH={sensors.humidity}, DP={sensors.dew_point}, HI={sensors.heat_index}")
+                # log_debug(_LOGGER, f"Entity ids for area {name}: T={sensors.temperature}, RH={sensors.humidity}, DP={sensors.dew_point}, HI={sensors.heat_index}")
 
             if area.radiant:
                 valve_state = as_bool(get_entity_value(entities_state, area.thermal_collector_valve_switch))
@@ -237,8 +237,8 @@ def take_plant_snapshot(
     except TypeError as ex:
         mean_apt = None
     
-    log_debug(_LOGGER, f"zones_snapshot: {zones_snapshot}" )
-    log_debug(_LOGGER, f"terrace_area: {terrace_area}" )
+    # log_debug(_LOGGER, f"zones_snapshot: {zones_snapshot}" )
+    # log_debug(_LOGGER, f"terrace_area: {terrace_area}" )
     outdoor: SensorPair = make_class(
         SensorPair,
         temperature=terrace_area.sensors.temperature if terrace_area and terrace_area.sensors else None,

@@ -59,7 +59,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # (opzionale) conserva la YAML grezza per diagnostica
     store["yaml"] = domain_cfg
 
-    _LOGGER.info("%s: configurazione YAML rilevata, avvio import flow…", DOMAIN)
+    log_info(_LOGGER, "%s: configurazione YAML rilevata, avvio import flow…", DOMAIN)
 
     # Avvia l’import in background (NON await!)
     # Passiamo SOLO la sezione del dominio, incapsulata sotto DOMAIN
@@ -164,9 +164,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 )
 
     entry_store = domain_store.get(entry.entry_id)
-    if entry_store:
-        log_debug(_LOGGER, "%s: COORDINATOR=%s", DOMAIN, entry_store.get(COORDINATOR))
-        log_debug(_LOGGER, "%s: SUPERVISOR=%s", DOMAIN, entry_store.get(SUPERVISOR))
+    # if entry_store:
+    #     log_debug(_LOGGER, "%s: COORDINATOR=%s", DOMAIN, entry_store.get(COORDINATOR))
+    #     log_debug(_LOGGER, "%s: SUPERVISOR=%s", DOMAIN, entry_store.get(SUPERVISOR))
     if entry_store and entry_store.get(COORDINATOR) and entry_store.get(SUPERVISOR):
         log_info(
             _LOGGER,
@@ -186,16 +186,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Istanzia e avvia il Coordinator legato a questo entry
     coordinator: ClimateCoordinator = ClimateCoordinator(hass=hass, entry=entry)
-    log_debug(_LOGGER, "%s: A", DOMAIN)
+    # log_debug(_LOGGER, "%s: A", DOMAIN)
     # Se il tuo coordinator espone runtime_config, popolalo in __init__ o qui
     # es: coordinator.runtime_config = build_runtime_config_from_options(entry.options)
-    await coordinator.async_config_entry_first_refresh()
-    log_debug(_LOGGER, "%s: B", DOMAIN)
+    # await coordinator.async_config_entry_first_refresh()
+    # log_debug(_LOGGER, "%s: B", DOMAIN)
 
     supervisor: ClimateSupervisor = ClimateSupervisor(hass=hass, coordinator=coordinator)
-    log_debug(_LOGGER, "%s: C", DOMAIN)
+    # log_debug(_LOGGER, "%s: C", DOMAIN)
     await supervisor.async_start()
-    log_debug(_LOGGER, "%s: D", DOMAIN)
+    # log_debug(_LOGGER, "%s: D", DOMAIN)
 
     if not entry_store:
         entry_store = domain_store.setdefault(entry.entry_id, {})
@@ -204,8 +204,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry_store[SUPERVISOR] = supervisor
     entry_store.setdefault(ENTITIES_STATE, {})
 
-    log_debug(_LOGGER, "%s: 2 COORDINATOR=%s", DOMAIN, entry_store.get(COORDINATOR))
-    log_debug(_LOGGER, "%s: 2 SUPERVISOR=%s", DOMAIN, entry_store.get(SUPERVISOR))
+    # log_debug(_LOGGER, "%s: 2 COORDINATOR=%s", DOMAIN, entry_store.get(COORDINATOR))
+    # log_debug(_LOGGER, "%s: 2 SUPERVISOR=%s", DOMAIN, entry_store.get(SUPERVISOR))
 
     # Piattaforme (climate, sensor, ecc.)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

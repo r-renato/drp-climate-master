@@ -67,11 +67,10 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Config di runtime e subscribe ai cambi di stato
         self._runtime: RuntimeConfig = build_runtime_config(entry)
-        self._runtime_2 = None  # per swap atomico
         # _LOGGER.debug("Runtime config %s", self._runtime)
 
         eids = collect_entity_ids_for_state_changes(self._runtime)
-        log_debug(_LOGGER, "Subscribing state changes for %d", eids)
+        # log_debug(_LOGGER, "Subscribing state changes for %d", eids)
         # Conserva l'unsubscribe per lo stop/unload
         self._unsub_state_changes = subscribe_entity_state_changes(
             self._hass, callback=self.entity_changed, entity_ids=eids
@@ -111,7 +110,7 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
         self._unsub_hastarted_event: Optional[Callable[[], None]] = hass.bus.async_listen_once(
-            EVENT_HOMEASSISTANT_STARTED, self._on_started
+            EVENT_HOMEASSISTANT_STARTED, self._async_complete_runtime_config
         )
         _LOGGER.debug(
             "ClimateCoordinator initialized (id=%s) per entry %s (source=%s). Update ogni %s secondi",
@@ -130,13 +129,14 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         
         self._unsub_delayed = async_call_later(self._hass, 10, _runner)
 
+    @callback
     async def _async_complete_runtime_config(self, event: Event) -> None:
 
         loop = asyncio.get_running_loop()
         start = loop.time()
         comp_store = self._hass.data.setdefault(DOMAIN, {})
         store = comp_store.setdefault(self._entry.entry_id, {})
-        log_debug(_LOGGER, "setup_unique_ids_store '%s'. (RuntimeConfig)", store)
+        log_debug(_LOGGER, "setup_unique_ids_store self id '%s'. (RuntimeConfig)", id(self))
         while True:
             comp_store = self._hass.data.setdefault(DOMAIN, {})
             store = comp_store.setdefault(self._entry.entry_id, {})
@@ -203,10 +203,10 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if changed:
             new_climate = replace(self._runtime.climate, areas=new_areas, mean_apt=new_mean)
             new_runtime = replace(self._runtime, climate=new_climate)
-            self._runtime_2 = new_runtime    # swap atomico
+            self._runtime = new_runtime    # swap atomico
 
         # log_info(_LOGGER, "RuntimeConfig: %s", self._runtime.climate.areas)
-        log_info(_LOGGER, "%s Done. (RuntimeConfig) %s", id(self), self._runtime)
+        log_info(_LOGGER, "self id %s Done. (RuntimeConfig) %s", id(self), self._runtime)
 
     # ----------------- Accesso allo store condiviso ----------------- #
 
@@ -524,8 +524,6 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # }
             # await self._async_temp_test_weater()
             self._season_data = await self._season_detector.detect()
-            log_debug(_LOGGER, "TEST A\n%s", self._season_data)
-            log_info(_LOGGER, "(RuntimeConfig) 33 %s %s", id(self), self._runtime_2)
             plat_snapshot: PlantSnapshot = take_plant_snapshot(
                 self._runtime,
                 self._season_data,
@@ -533,6 +531,9 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 now_tz(ha_timezone(self._hass)[1])
             )
             log_debug(_LOGGER, "TEST B\n%s", plat_snapshot)
+
+            # if plat_snapshot and plat_snapshot.zones:
+            #     core_rooms = 
 
             # core_rooms: list[SensorPair] = []
             # core1 = plat_snapshot.zones.get("Master Bedroom") if plat_snapshot.zones else None
