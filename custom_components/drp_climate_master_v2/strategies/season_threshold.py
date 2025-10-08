@@ -96,19 +96,14 @@
 #
 from __future__ import annotations
 
-from datetime import date, datetime, time
-from statistics import mean
-from typing import Protocol, Optional, Dict, Tuple
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
-from typing import Dict, Mapping, Optional
 import logging
-import time as _time
+import math
+from statistics import mean
+from typing import Dict, Mapping, Optional
 
-from ..domain.models.plant import PlantSnapshot, ZoneSnapshot
-
-from ..domain.models.runtime_schema import SensorPair
-from ..domain.models.season import SeasonState
+from ..domain.models.plant import PlantSnapshot
 
 from ..domain.enums import HVACOperatingProfile, Seasons
 
@@ -439,9 +434,249 @@ class SeasonThresholdStrategy:
         return threshold
 
     async def _build_threshold(self) -> SeasonThreshold:
-        """Actual computation placeholder to be implemented in subsequent steps."""
+        """Build a dynamic comfort band using the current plant snapshot."""
 
-        raise NotImplementedError("SeasonThresholdStrategy._build_threshold is not implemented yet")
+        snapshot = self._plant_snapshot
+
+        def _safe_mean(values: list[float]) -> Optional[float]:
+            return mean(values) if values else None
+
+        def _clamp(value: float, lower: float, upper: float) -> float:
+            return max(lower, min(upper, value))
+
+        def _estimate_dew_point(temp: Optional[float], rh: Optional[float]) -> Optional[float]:
+            if temp is None or rh is None:
+                return None
+            if rh <= 0.0 or rh > 100.0:
+                return None
+            a = 17.625
+            b = 243.04
+            gamma = (a * temp) / (b + temp) + math.log(rh / 100.0)
+            return (b * gamma) / (a - gamma)
+
+        zones = snapshot.zones or {}
+        zone_temps: list[float] = []
+        zone_humidities: list[float] = []
+        zone_dew_points: list[float] = []
+
+        for zone in zones.values():
+            sensors = zone.sensors
+            if sensors is None:
+                continue
+            if sensors.temperature is not None:
+                zone_temps.append(float(sensors.temperature))
+            if sensors.humidity is not None:
+                zone_humidities.append(float(sensors.humidity))
+            if sensors.dew_point is not None:
+                zone_dew_points.append(float(sensors.dew_point))
+            else:
+                dp_estimate = _estimate_dew_point(
+                    float(sensors.temperature) if sensors.temperature is not None else None,
+                    float(sensors.humidity) if sensors.humidity is not None else None,
+                )
+                if dp_estimate is not None:
+                    zone_dew_points.append(dp_estimate)
+
+        indoor_temp_avg = _safe_mean(zone_temps)
+        if indoor_temp_avg is None and snapshot.mean_apt and snapshot.mean_apt.temperature is not None:
+            indoor_temp_avg = float(snapshot.mean_apt.temperature)
+
+        indoor_humidity_avg = _safe_mean(zone_humidities)
+        if indoor_humidity_avg is None and snapshot.mean_apt and snapshot.mean_apt.humidity is not None:
+            indoor_humidity_avg = float(snapshot.mean_apt.humidity)
+
+        dew_point_avg = _safe_mean(zone_dew_points)
+        if (
+            dew_point_avg is None
+            and indoor_temp_avg is not None
+            and indoor_humidity_avg is not None
+        ):
+            dew_point_avg = _estimate_dew_point(indoor_temp_avg, indoor_humidity_avg)
+
+        season_state = snapshot.season
+        season = season_state.overridden if season_state else Seasons.WINTER
+
+        base_center_map: Dict[Seasons, float] = {
+            Seasons.WINTER: 21.0,
+            Seasons.SPRING: 21.5,
+            Seasons.SUMMER: 24.5,
+            Seasons.AUTUMN: 21.5,
+        }
+        base_center = base_center_map.get(season, 21.0)
+
+        if indoor_temp_avg is not None:
+            center_temp = 0.7 * base_center + 0.3 * indoor_temp_avg
+        else:
+            center_temp = base_center
+
+        if snapshot.presence_vacation:
+            profile = HVACOperatingProfile.VACATION
+            profile_bias = 2.0
+        elif snapshot.presence_nobodysin:
+            profile = HVACOperatingProfile.ECO
+            profile_bias = 1.0
+        else:
+            profile = HVACOperatingProfile.COMFORT
+            profile_bias = 0.0
+
+        if season in (Seasons.WINTER, Seasons.AUTUMN):
+            center_temp -= profile_bias
+        else:
+            center_temp += profile_bias
+
+        base_half_range_map: Dict[Seasons, float] = {
+            Seasons.WINTER: 0.7,
+            Seasons.SPRING: 0.6,
+            Seasons.SUMMER: 1.0,
+            Seasons.AUTUMN: 0.7,
+        }
+        base_half_range = base_half_range_map.get(season, 0.7)
+
+        temp_spread = (max(zone_temps) - min(zone_temps)) if len(zone_temps) >= 2 else 0.0
+        half_range = base_half_range + min(temp_spread * 0.25, 0.5)
+
+        if snapshot.home_windows_state:
+            half_range += 0.2
+
+        if profile is HVACOperatingProfile.VACATION:
+            half_range += 0.3
+
+        half_range = _clamp(half_range, 0.5, 1.5)
+
+        temperature_min = center_temp - half_range
+        temperature_max = center_temp + half_range
+
+        humidity_center_map: Dict[Seasons, float] = {
+            Seasons.WINTER: 45.0,
+            Seasons.SPRING: 50.0,
+            Seasons.SUMMER: 55.0,
+            Seasons.AUTUMN: 50.0,
+        }
+        humidity_center = humidity_center_map.get(season, 50.0)
+        if indoor_humidity_avg is not None:
+            humidity_center = 0.6 * humidity_center + 0.4 * indoor_humidity_avg
+
+        humidity_half_range_map: Dict[Seasons, float] = {
+            Seasons.WINTER: 7.5,
+            Seasons.SPRING: 8.0,
+            Seasons.SUMMER: 10.0,
+            Seasons.AUTUMN: 8.0,
+        }
+        humidity_half_range = humidity_half_range_map.get(season, 8.0)
+
+        if profile is HVACOperatingProfile.VACATION:
+            humidity_half_range += 1.0
+        humidity_half_range = _clamp(humidity_half_range, 6.0, 12.0)
+
+        humidity_min = _clamp(humidity_center - humidity_half_range, 30.0, 65.0)
+        humidity_max = _clamp(humidity_center + humidity_half_range, 35.0, 70.0)
+        if humidity_min > humidity_max:
+            humidity_min = humidity_max
+
+        dew_point_margin = 2.0 if season in (Seasons.WINTER, Seasons.AUTUMN) else 3.0
+        dew_point_target: Optional[float] = None
+
+        if indoor_temp_avg is not None:
+            safe_limit = indoor_temp_avg - dew_point_margin
+            if dew_point_avg is not None:
+                dew_point_target = min(dew_point_avg, safe_limit)
+            else:
+                dew_point_target = safe_limit
+
+        heating_gap = _clamp(half_range * 0.9, 0.4, 1.0)
+        cooling_gap = heating_gap
+
+        hvac = HVACHysteresis(
+            heating_on=temperature_min,
+            heating_off=min(temperature_max, temperature_min + heating_gap),
+            cooling_on=temperature_max,
+            cooling_off=max(temperature_min, temperature_max - cooling_gap),
+            dehumidifying_on=dew_point_target,
+            dehumidifying_off=(
+                dew_point_target - 1.0 if dew_point_target is not None else None
+            ),
+        )
+
+        zone_thresholds: Dict[str, ZoneThreshold] = {}
+        for zone_name, zone in zones.items():
+            sensors = zone.sensors
+            zone_temp = float(sensors.temperature) if sensors and sensors.temperature is not None else None
+            zone_humidity = float(sensors.humidity) if sensors and sensors.humidity is not None else None
+            zone_dew_point = float(sensors.dew_point) if sensors and sensors.dew_point is not None else None
+
+            zone_temp_offset = 0.0
+            if zone_temp is not None and indoor_temp_avg is not None:
+                zone_temp_offset = _clamp(zone_temp - indoor_temp_avg, -2.0, 2.0)
+
+            zone_temp_adjust = 0.3 * zone_temp_offset
+            zone_temp_min = temperature_min + zone_temp_adjust
+            zone_temp_max = temperature_max + zone_temp_adjust
+
+            zone_humidity_adjust = 0.0
+            if zone_humidity is not None:
+                zone_humidity_adjust = _clamp(
+                    zone_humidity - humidity_center,
+                    -10.0,
+                    10.0,
+                )
+            zone_humidity_min = _clamp(humidity_min + 0.3 * zone_humidity_adjust, 28.0, 70.0)
+            zone_humidity_max = _clamp(humidity_max + 0.3 * zone_humidity_adjust, 32.0, 75.0)
+            if zone_humidity_min > zone_humidity_max:
+                zone_humidity_min = zone_humidity_max
+
+            zone_dew_target = dew_point_target
+            if zone_dew_point is not None:
+                zone_dew_target = zone_dew_point if zone_dew_target is None else min(zone_dew_point, zone_dew_target)
+
+            if zone_temp is not None and zone_dew_target is not None:
+                zone_dew_target = min(zone_dew_target, zone_temp - 0.8)
+
+            zone_dew_margin: Optional[float] = None
+            if zone.flow_t is not None:
+                reference = zone_dew_target if zone_dew_target is not None else zone_temp
+                if reference is not None:
+                    zone_dew_margin = _clamp(zone.flow_t - reference, 1.0, 6.0)
+            elif zone_dew_target is not None:
+                zone_dew_margin = 2.5
+
+            zone_hvac = HVACHysteresis(
+                heating_on=zone_temp_min,
+                heating_off=min(zone_temp_max, zone_temp_min + heating_gap),
+                cooling_on=zone_temp_max,
+                cooling_off=max(zone_temp_min, zone_temp_max - cooling_gap),
+                dehumidifying_on=zone_dew_target,
+                dehumidifying_off=(
+                    zone_dew_target - 1.0 if zone_dew_target is not None else None
+                ),
+            )
+
+            zone_thresholds[zone_name] = ZoneThreshold(
+                zone=zone_name,
+                temperature_min=zone_temp_min,
+                temperature_max=zone_temp_max,
+                humidity_min=zone_humidity_min,
+                humidity_max=zone_humidity_max,
+                dew_point_target=zone_dew_target,
+                hvac=zone_hvac,
+                dew_point_margin=zone_dew_margin,
+            )
+
+        threshold = SeasonThreshold(
+            season=season,
+            profile=profile,
+            temperature_min=temperature_min,
+            temperature_max=temperature_max,
+            humidity_min=humidity_min,
+            humidity_max=humidity_max,
+            dew_point_target=dew_point_target,
+            hvac=hvac,
+            zones=zone_thresholds,
+            ttl_seconds=self._default_ttl_seconds,
+        )
+
+        _LOGGER.debug("Season thresholds built", extra=threshold.to_dict())
+
+        return threshold
 
 
 
