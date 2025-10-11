@@ -524,16 +524,19 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # }
             # await self._async_temp_test_weater()
             self._season_data = await self._season_detector.detect()
-            plat_snapshot: PlantSnapshot = take_plant_snapshot(
+            plant_snapshot: PlantSnapshot = take_plant_snapshot(
                 self._runtime,
                 self._season_data,
                 self._entities_state,
                 now_tz(ha_timezone(self._hass)[1])
             )
-            log_debug(_LOGGER, "TEST B\n%s", plat_snapshot)
+            log_debug(_LOGGER, "TEST B\n%s", plant_snapshot)
 
-            # if plat_snapshot and plat_snapshot.zones:
-            #     core_rooms = 
+            if plant_snapshot:
+                sts = SeasonThresholdStrategy(plant_snapshot)
+                await sts.compute()
+                thr = sts.get_threshold()
+                log_debug(_LOGGER, "Computed thresholds: %s", thr)
 
             # core_rooms: list[SensorPair] = []
             # core1 = plat_snapshot.zones.get("Master Bedroom") if plat_snapshot.zones else None

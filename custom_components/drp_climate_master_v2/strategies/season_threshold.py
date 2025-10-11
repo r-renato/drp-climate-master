@@ -283,6 +283,89 @@ class SeasonThreshold:
             raise KeyError(f"Zone '{zone}' not available in current thresholds")
         return self.zones[zone]
 
+    def __str__(self) -> str:
+        # ----- helpers compatti -----
+        def fenum(x):
+            if x is None:
+                return "-"
+            return getattr(x, "value", None) or getattr(x, "name", None) or str(x)
+
+        def fnum(x, nd=1, unit=""):
+            return "-" if x is None else f"{x:.{nd}f}{unit}"
+
+        def fperc(x):
+            return "-" if x is None else f"{x:.0f}%"
+
+        def line(label: str, value: str) -> str:
+            return f"  {label:<20} :: {value}"
+
+        # ----- header -----
+        lines: list[str] = []
+        lines.append("------------------------------------------------------------------")
+        lines.append("SEASON THRESHOLDS")
+
+        # ----- campi principali -----
+        lines.append(line("Season",            fenum(self.season)))
+        lines.append(line("Profile",           fenum(self.profile)))
+        lines.append(line("Temperature Min",   fnum(self.temperature_min, 1, "°C")))
+        lines.append(line("Temperature Max",   fnum(self.temperature_max, 1, "°C")))
+        lines.append(line("Humidity Min",      fperc(self.humidity_min)))
+        lines.append(line("Humidity Max",      fperc(self.humidity_max)))
+        lines.append(line("DP Target",         fnum(self.dew_point_target, 1, "°C")))
+        lines.append(line("Computed At",       self.computed_at.isoformat()))
+        vu = self.valid_until
+        lines.append(line("Valid Until",       vu.isoformat() if vu else "-"))
+        lines.append(line("TTL",               f"{self.ttl_seconds}s" if self.ttl_seconds is not None else "-"))
+        lines.append(line("Expired",           "yes" if self.is_expired() else "no"))
+
+        # ----- HVAC hysteresis -----
+        try:
+            hv = self.hvac.to_dict()
+        except Exception:
+            hv = None
+
+        if isinstance(hv, dict) and hv:
+            lines.append(line("HVAC", ""))  # titolo sezione
+            for k in sorted(hv):
+                # es.: heat_hyst -> "Heat Hyst"
+                pretty_k = k.replace("_", " ").title()
+                v = hv[k]
+                # prova a formattare numeri con 1 decimale, altrimenti str()
+                v_str = f"{v:.1f}" if isinstance(v, (int, float)) else str(v)
+                lines.append(line(f"  {pretty_k}", v_str))
+        else:
+            lines.append(line("HVAC", str(self.hvac)))
+
+        # ----- Zone -----
+        if self.zones:
+            lines.append(line("Zones", str(len(self.zones))))
+            for name, zthr in sorted(self.zones.items()):
+                # Prova ad estrarre alcuni campi comuni via to_dict()
+                tmin = tmax = hmin = hmax = dpt = None
+                try:
+                    zd = zthr.to_dict()  # type: ignore[attr-defined]
+                    tmin = zd.get("temperature_min")
+                    tmax = zd.get("temperature_max")
+                    hmin = zd.get("humidity_min")
+                    hmax = zd.get("humidity_max")
+                    dpt  = zd.get("dew_point_target")
+                except Exception:
+                    pass
+
+                lines.append(f"  {name}")
+                if any(v is not None for v in (tmin, tmax, hmin, hmax, dpt)):
+                    lines.append(line("    T Range", f"{fnum(tmin,1,'°C')} – {fnum(tmax,1,'°C')}"))
+                    lines.append(line("    RH Range", f"{fperc(hmin)} – {fperc(hmax)}"))
+                    lines.append(line("    DP Target", fnum(dpt,1,'°C')))
+                else:
+                    # fallback: stampa l’oggetto così com’è
+                    lines.append(line("    Threshold", str(zthr)))
+        else:
+            lines.append(line("Zones", "0"))
+
+        return "\n".join(lines)
+
+
 
 class ThresholdNotComputedError(RuntimeError):
     """Raised when the strategy cache is accessed before any computation."""
