@@ -208,6 +208,13 @@ CONF_TOKEN: Final[str] = "token"
 CONF_LATITUDE: Final[str] = "latitude"
 CONF_LONGITUDE: Final[str] = "longitude"
 
+# Historical data
+CONF_INFLUXDB: Final[str] = "influxdb"
+CONF_ORGANIZATION: Final[str] = "organization"
+CONF_BUCKET: Final[str] = "bucket"
+CONF_URL: Final[str] = "url"
+
+
 # ======================================================
 # SCENARIOS
 # ======================================================

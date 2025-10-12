@@ -24,6 +24,7 @@ from ..const import (
     CONF_AUTUMN,
     CONF_BOILER_TEMP_SYSTEM_RETURN,
     CONF_BOILER_TEMP_SYSTEM_SUPPLY,
+    CONF_BUCKET,
     CONF_CLIMATE,
     CONF_COMPRESSOR_MANAGEMENT,
     CONF_COMPRESSOR_ONLY,
@@ -59,6 +60,7 @@ from ..const import (
     CONF_HOME_WINDOWS_STATE,
     CONF_HUMIDITY,
     CONF_INDOOR,
+    CONF_INFLUXDB,
     CONF_LATITUDE,
     CONF_LONGITUDE,
     CONF_LOW_WATER_TEMP,
@@ -67,6 +69,7 @@ from ..const import (
     CONF_MODE,
     CONF_MQ,
     CONF_NOBODYSIN,
+    CONF_ORGANIZATION,
     CONF_PDC_TEMP_WATER_IN,
     CONF_PDC_TEMP_WATER_OUT,
     CONF_POWER,
@@ -91,6 +94,7 @@ from ..const import (
     CONF_THREE_POINT_MIXING_VALVE,
     CONF_TOKEN,
     CONF_UNITS,
+    CONF_URL,
     CONF_VACATION,
     CONF_VALUE,
     CONF_VENT_RECIRCULATION,
@@ -281,6 +285,19 @@ WEATHER_SCHEMA = vol.Schema(
     }
 )
 
+HISTORICAL_DATA_SCHEMA = vol.Schema(
+    {
+        vol.Optional(CONF_INFLUXDB) : vol.Schema(
+            {
+                vol.Required(CONF_ORGANIZATION): cv.string,
+                vol.Required(CONF_BUCKET): cv.string,
+                vol.Required(CONF_URL): cv.string,
+                vol.Required(CONF_TOKEN): cv.string,
+            }
+        )
+    }
+)
+
 BASE_CLIMATE_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_NAME): cv.string,
@@ -300,6 +317,7 @@ BASE_CLIMATE_SCHEMA = vol.Schema(
 
         vol.Required(CONF_HOME_WINDOWS_STATE): cv.entity_id,
         vol.Required(CONF_WEATHER): vol.All(WEATHER_SCHEMA),
+        vol.Required(CONF_HISTORICAL_DATA): vol.All(HISTORICAL_DATA_SCHEMA),
         vol.Required(CONF_SCENARIOS) : vol.Schema(
             {
                 vol.Required(CONF_VACATION): cv.string,
