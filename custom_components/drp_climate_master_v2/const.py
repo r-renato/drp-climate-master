@@ -213,7 +213,7 @@ CONF_INFLUXDB: Final[str] = "influxdb"
 CONF_ORGANIZATION: Final[str] = "organization"
 CONF_BUCKET: Final[str] = "bucket"
 CONF_URL: Final[str] = "url"
-
+DEFAULT_INFLUXDB_URL: Final[str] = "http://127.0.0.1:8086"
 
 # ======================================================
 # SCENARIOS

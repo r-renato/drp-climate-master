@@ -104,6 +104,7 @@ from ..const import (
     CONF_WEATHER,
     CONF_WINTER,
     DEFAULT_CLIMATE_NAME,
+    DEFAULT_INFLUXDB_URL,
     DEFAULT_TEMP_UNIT,
     DEFAULT_UNITS,
     DOMAIN
@@ -291,7 +292,7 @@ HISTORICAL_DATA_SCHEMA = vol.Schema(
             {
                 vol.Required(CONF_ORGANIZATION): cv.string,
                 vol.Required(CONF_BUCKET): cv.string,
-                vol.Required(CONF_URL): cv.string,
+                vol.Optional(CONF_URL, default=DEFAULT_INFLUXDB_URL): cv.string,
                 vol.Required(CONF_TOKEN): cv.string,
             }
         )
