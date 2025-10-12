@@ -1,0 +1,42 @@
+{
+    "options": {
+        "step": {
+            "init": {
+                "title": "Opzioni DRP Climate",
+                "description": "Scegli quale sezione della configurazione vuoi modificare."
+            },
+            "dynamic": {
+                "title": "Parametri dinamici",
+                "description": "Aggiorna il comportamento runtime, le funzioni supportate e le fasce di comfort."
+            },
+            "areas": {
+                "title": "Aree",
+                "description": "Rivedi gli ambienti e i relativi sensori di temperatura e umidità."
+            },
+            "radiant": {
+                "title": "Impianti radianti",
+                "description": "Modifica la mappatura dell'impianto radiante e le entità collegate."
+            },
+            "supply_units": {
+                "title": "Unità di mandata",
+                "description": "Gestisci le unità di mandata e i dispositivi di ventilazione associati alle aree."
+            },
+            "vmc": {
+                "title": "VMC",
+                "description": "Configura i controllori della ventilazione meccanica controllata."
+            },
+            "weather": {
+                "title": "Meteo",
+                "description": "Modifica i provider meteo previsionali e storici e le relative coordinate."
+            },
+            "historical_data": {
+                "title": "Dati storici",
+                "description": "Aggiorna credenziali e coordinate del provider meteo storico."
+            },
+            "advanced": {
+                "title": "Altri dispositivi e scenari",
+                "description": "Gestisci i blocchi devices residui e gli scenari speciali (vacanza, nessuno in casa)."
+            }
+        }
+    }
+}

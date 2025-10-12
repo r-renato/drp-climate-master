@@ -1,0 +1,42 @@
+{
+    "options": {
+        "step": {
+            "init": {
+                "title": "DRP Climate options",
+                "description": "Choose which section of the configuration you want to edit."
+            },
+            "dynamic": {
+                "title": "Dynamic parameters",
+                "description": "Update the runtime behaviour, supported features and comfort temperature ranges."
+            },
+            "areas": {
+                "title": "Areas",
+                "description": "Review rooms and their temperature and humidity sensors."
+            },
+            "radiant": {
+                "title": "Radiant devices",
+                "description": "Edit the radiant system mapping and related entities."
+            },
+            "supply_units": {
+                "title": "Supply units",
+                "description": "Manage supply units and ventilation devices associated with each area."
+            },
+            "vmc": {
+                "title": "VMC",
+                "description": "Configure the mechanical ventilation controllers."
+            },
+            "weather": {
+                "title": "Weather",
+                "description": "Change the forecast and historical weather providers and coordinates."
+            },
+            "historical_data": {
+                "title": "Historical data",
+                "description": "Adjust historical weather provider credentials and coordinates."
+            },
+            "advanced": {
+                "title": "Other devices and scenarios",
+                "description": "Edit fallback device blocks and special scenarios (vacation, nobody's in)."
+            }
+        }
+    }
+}
