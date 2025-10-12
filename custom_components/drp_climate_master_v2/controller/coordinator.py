@@ -66,6 +66,7 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._entities_state_store: dict = entry_store[ENTITIES_STATE]
 
         # Config di runtime e subscribe ai cambi di stato
+        self._init_complete = False
         self._runtime: RuntimeConfig = build_runtime_config(entry)
         # _LOGGER.debug("Runtime config %s", self._runtime)
 
@@ -137,6 +138,7 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         comp_store = self._hass.data.setdefault(DOMAIN, {})
         store = comp_store.setdefault(self._entry.entry_id, {})
         log_debug(_LOGGER, "setup_unique_ids_store self id '%s'. (RuntimeConfig)", id(self))
+
         while True:
             comp_store = self._hass.data.setdefault(DOMAIN, {})
             store = comp_store.setdefault(self._entry.entry_id, {})
@@ -206,6 +208,7 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._runtime = new_runtime    # swap atomico
 
         # log_info(_LOGGER, "RuntimeConfig: %s", self._runtime.climate.areas)
+        self._init_complete = True
         log_info(_LOGGER, "self id %s Done. (RuntimeConfig) %s", id(self), self._runtime)
 
     # ----------------- Accesso allo store condiviso ----------------- #
@@ -514,6 +517,8 @@ class ClimateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         Loop SLOW: raccoglie sensori, calcola grandezze derivate e aggiorna lo snapshot.
         Importante: niente side-effect (niente comandi agli attuatori).
         """
+        if not self._init_complete:
+            return {}
         try:
             # _LOGGER.debug("_entities_state keys %s", self._entities_state.keys())
             # TODO: leggere da adapters e costruire snapshot parziale
