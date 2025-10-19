@@ -79,12 +79,12 @@ from .helpers.config_flow_ui_schemas import (
 _LOGGER = logging.getLogger(__name__)
 
 # Opzioni runtime (allineate al runtime_config)
-OPT_UPDATE_INTERVAL_S = "update_interval_s"
-OPT_SUPPORTS_HEATING = "supports_heating"
-OPT_SUPPORTS_COOLING = "supports_cooling"
-OPT_SUPPORTS_DEHUMIDIFYING = "supports_dehumidifying"
-OPT_SETPOINT_STEP_C = "setpoint_step_c"
-OPT_MANUAL_OVERRIDE_MIN = "manual_override_minutes"
+# OPT_UPDATE_INTERVAL_S = "update_interval_s"
+# OPT_SUPPORTS_HEATING = "supports_heating"
+# OPT_SUPPORTS_COOLING = "supports_cooling"
+# OPT_SUPPORTS_DEHUMIDIFYING = "supports_dehumidifying"
+# OPT_SETPOINT_STEP_C = "setpoint_step_c"
+# OPT_MANUAL_OVERRIDE_MIN = "manual_override_minutes"
 
 
 class DrpClimateMasterConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -139,12 +139,6 @@ class DrpClimateMasterConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_APT_WINDOWS: {},
             CONF_CONFORT_ZONES: {},
             CONF_UNITS: str(DEFAULT_UNITS),
-            OPT_UPDATE_INTERVAL_S: 30,
-            OPT_SUPPORTS_HEATING: True,
-            OPT_SUPPORTS_COOLING: False,
-            OPT_SUPPORTS_DEHUMIDIFYING: False,
-            OPT_SETPOINT_STEP_C: 0.5,
-            OPT_MANUAL_OVERRIDE_MIN: 90,
             CONF_MAX_TEMP: 35.0,
             CONF_MIN_TEMP: 5.0,
             CONF_STEP: 0.5,
@@ -247,15 +241,6 @@ class DrpClimateMasterOptionsFlowHandler(OptionsFlow):
         new_options: Dict[str, Any] = dict(cur)
         new_options.update(
             {
-                OPT_UPDATE_INTERVAL_S: user_input[OPT_UPDATE_INTERVAL_S],
-                OPT_SUPPORTS_HEATING: user_input[OPT_SUPPORTS_HEATING],
-                OPT_SUPPORTS_COOLING: user_input[OPT_SUPPORTS_COOLING],
-                OPT_SUPPORTS_DEHUMIDIFYING: user_input[OPT_SUPPORTS_DEHUMIDIFYING],
-                OPT_SETPOINT_STEP_C: float(user_input[OPT_SETPOINT_STEP_C]),
-                OPT_MANUAL_OVERRIDE_MIN: user_input[OPT_MANUAL_OVERRIDE_MIN],
-                CONF_MAX_TEMP: float(user_input[CONF_MAX_TEMP]),
-                CONF_MIN_TEMP: float(user_input[CONF_MIN_TEMP]),
-                CONF_STEP: float(user_input[CONF_STEP]),
                 CONF_UNITS: str(user_input[CONF_UNITS]),
                 CONF_TEMPERATURE_UNIT: str(user_input[CONF_TEMPERATURE_UNIT]),
             }

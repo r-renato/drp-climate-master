@@ -345,9 +345,9 @@ BASE_CLIMATE_SCHEMA = vol.Schema(
         vol.Optional(CONF_FRIENDLY_NAME): cv.string,
         vol.Optional(CONF_UNIQUE_ID): cv.string,
 
-        vol.Optional(CONF_MAX_TEMP, default=35): vol.Coerce(float),
-        vol.Optional(CONF_MIN_TEMP, default=5): vol.Coerce(float),
-        vol.Optional(CONF_STEP, default=0.5): vol.Coerce(float),
+        # vol.Optional(CONF_MAX_TEMP, default=35): vol.Coerce(float),
+        # vol.Optional(CONF_MIN_TEMP, default=5): vol.Coerce(float),
+        # vol.Optional(CONF_STEP, default=0.5): vol.Coerce(float),
         vol.Optional(CONF_TEMPERATURE_UNIT, default=DEFAULT_TEMP_UNIT): cv.string,
         vol.Optional(CONF_UNITS, default=DEFAULT_UNITS): cv.string,
 
@@ -359,7 +359,7 @@ BASE_CLIMATE_SCHEMA = vol.Schema(
         vol.Optional(CONF_APT_WINDOWS): vol.All(APT_WINDOWS_SCHEMA),
         vol.Optional(CONF_CONFORT_ZONES): vol.All(CONFORT_ZONES_SCHEMA),
 
-        vol.Required(CONF_HOME_WINDOWS_STATE): cv.entity_id,
+        # vol.Required(CONF_HOME_WINDOWS_STATE): cv.entity_id,
         vol.Required(CONF_WEATHER): vol.All(WEATHER_SCHEMA),
         vol.Required(CONF_HISTORICAL_DATA): vol.All(HISTORICAL_DATA_SCHEMA),
         vol.Required(CONF_SCENARIOS) : vol.Schema(
