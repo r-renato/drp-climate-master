@@ -6,7 +6,9 @@ from typing import Any, Mapping
 
 import voluptuous as vol
 from homeassistant.helpers import selector
-
+from homeassistant.const import (
+    CONF_TEMPERATURE_UNIT,
+)
 from ..const import (
     CONF_AREAS,
     CONF_DEVICES,
@@ -14,7 +16,6 @@ from ..const import (
     CONF_HISTORICAL_DATA,
     CONF_WEATHER,
     CONF_HOME_WINDOWS_STATE,
-    CONF_TEMPERATURE_UNIT,
     CONF_UNITS,
     CONF_MAX_TEMP,
     CONF_MIN_TEMP,
@@ -24,9 +25,6 @@ from ..const import (
     CONF_HUB_NAME,
     CONF_CLIMATE_NAME,
     CONF_CLIMATE_UNIQUE_ID,
-    CONF_RADIANT,
-    CONF_SUPPLY_UNITS,
-    CONF_VMC,
     CONF_APT_WINDOWS,
     CONF_CONFORT_ZONES,
 )
