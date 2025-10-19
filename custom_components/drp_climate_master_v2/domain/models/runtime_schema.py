@@ -148,6 +148,10 @@ class ScenariosConfig:
     vacation: str
     nobodysin: str
 
+@dataclass(frozen=True)
+class AptWindowsConfig:
+    state: str
+
 @dataclass(frozen=True, slots=True)
 class ForecastDataConfig:
     # Per HA: entity_id weather.* (es. "weather.home_rome")
@@ -172,7 +176,7 @@ class ClimateConfig:
     units: str
     areas: List[AreaConfig]
     devices: DevicesConfig
-    home_windows_state: str
+    apt_windows: Optional[AptWindowsConfig]
     weather: WeatherConfig
     scenarios: ScenariosConfig
     temperature_unit: str

@@ -346,9 +346,10 @@ class PlantSnapshot:
     vmc / pdc / supply_unit : Optional[...Snapshot]
         Stati della VMC, PDC/generatore e unità di distribuzione (se disponibili).
 
-    home_windows_state : Optional[bool]
-        Stato finestre *aggregato* (True = almeno una finestra aperta). Utile per
-        politiche di sicurezza/efficienza (es. stop raffrescamento se finestre aperte).
+    apt_windows_open : Optional[bool]
+        Stato finestre dell'appartamento (True = almeno una finestra aperta).
+        Utile per politiche di sicurezza/efficienza (es. stop raffrescamento se
+        finestre aperte).
 
     presence_vacation : Optional[bool]
         Flag presenza “vacanza/assenza prolungata” (True = casa non occupata per periodo esteso).
@@ -382,7 +383,7 @@ class PlantSnapshot:
     pdc: Optional[PDCSnapshot] = None
     supply_unit: Optional[SupplyUnitSnapshot] = None
 
-    home_windows_state: Optional[bool] = None
+    apt_windows_open: Optional[bool] = None
 
     presence_vacation: Optional[bool] = None
     presence_nobodysin: Optional[bool] = None
@@ -469,7 +470,7 @@ class PlantSnapshot:
             ]
 
         lines += [
-            f"Home windows stat    :: {fbool(self.home_windows_state, 'Some Open', 'All Closed')}",
+            f"Home windows stat    :: {fbool(self.apt_windows_open, 'Some Open', 'All Closed')}",
             f"Vacation             :: {fbool(self.presence_vacation, 'Yes', 'No')}",
             f"Nobody's in          :: {fbool(self.presence_nobodysin, 'True', 'False')}",
             f"------------------------------------------------------------------",
