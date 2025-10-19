@@ -8,7 +8,6 @@ drp_climate_master_v2:
     climate:
       - name: "Home Climate Master v2"
         unique_id: "home_climate_master_v2"
-        units: "si"
 ####### ####### ####### ####### #######
 #   H O M E  A R E A S
 ####### ####### ####### ####### #######
@@ -172,6 +171,9 @@ drp_climate_master_v2:
 ####### ####### ####### ####### #######
 #   O T H E R  
 ####### ####### ####### ####### #######
+        units: "si"
+        temperature_unit: "°C"
+
         home_windows_state: binary_sensor.home_windows_state
         
         weather:
@@ -226,9 +228,4 @@ drp_climate_master_v2:
             humi_max: 65
             dp_min: 14.0
             dp_max: 14.5
-
-
-
-
-
 
