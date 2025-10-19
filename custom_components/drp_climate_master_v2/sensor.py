@@ -262,7 +262,12 @@ class BaseSensor(
 
     @property
     def native_value(self) -> Optional[float]:
-        return computed_float_or_none(self._attr_native_value, precision=self._attr_suggested_display_precision)
+        value = as_float(self._attr_native_value)
+
+        if value is None:
+            return None
+        
+        return round(value, self._attr_suggested_display_precision)
     
     @property
     def unique_id(self) -> str:
@@ -282,6 +287,13 @@ class BaseSensor(
     def available(self) -> bool:
         """Disponibilità legata allo stato dell'ultimo aggiornamento del coordinator."""
         return bool(self.coordinator.last_update_success)
+
+    @property
+    def extra_state_attributes(self):
+        """Return the extra state attributes of the device."""
+        data: dict[str, Any] = {}
+        data[ "manufacturer" ] = INTEGRATION_MANUFACTURER
+        return data
 
     async def async_added_to_hass(self) -> None:
         """

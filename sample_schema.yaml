@@ -193,3 +193,42 @@ drp_climate_master_v2:
         scenarios:
           vacation: switch.scene_button_everyone_to_vacation
           nobodysin : switch.scene_button_all_out_of_home
+
+        apt_windows:
+          state: binary_sensor.
+          
+        confort_zones: #Apt Human Confort Zone
+          summer:
+            temp_min: 24.0
+            temp_max: 27.0
+            humi_min: 40
+            humi_max: 58
+            dp_min: 18.0
+            dp_max: 18.5
+          autumn:
+            temp_min: 18.0
+            temp_max: 23.7
+            humi_min: 45
+            humi_max: 65
+            dp_min: 9.0
+            dp_max: 9.5
+          winter:
+            temp_min: 17.5
+            temp_max: 20.9
+            humi_min: 40
+            humi_max: 58
+            dp_min: 9.0
+            dp_max: 9.5
+          sprint:
+            temp_min: 19.0
+            temp_max: 24.0
+            humi_min: 45
+            humi_max: 65
+            dp_min: 14.0
+            dp_max: 14.5
+
+
+
+
+
+

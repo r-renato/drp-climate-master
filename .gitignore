@@ -9,6 +9,5 @@ venv
 custom_components/hacs
 x_*
 .haconfig
-backup
-backup1
+backup*
 aigen

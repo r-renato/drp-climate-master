@@ -221,3 +221,9 @@ DEFAULT_INFLUXDB_URL: Final[str] = "http://127.0.0.1:8086"
 CONF_VACATION: Final[str] = "vacation"
 CONF_NOBODYSIN: Final[str] = "nobodysin"
 
+# -------------------------
+# Chiavi dati / opzioni (flow)
+# -------------------------
+CONF_HUB_NAME = "hub_name"
+CONF_CLIMATE_NAME = "climate_name"
+CONF_CLIMATE_UNIQUE_ID = "climate_unique_id"
