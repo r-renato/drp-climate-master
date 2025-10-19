@@ -4,7 +4,7 @@
 ##
 ######## ####### ####### ####### #######
 drp_climate_master_v2:
-  - name: "Climate Master Hub"
+  - name: "Climate Master"
     climate:
       - name: "Home Climate Master v2"
         unique_id: "home_climate_master_v2"
@@ -173,8 +173,6 @@ drp_climate_master_v2:
 ####### ####### ####### ####### #######
         units: "si"
         temperature_unit: "°C"
-
-        home_windows_state: binary_sensor.home_windows_state
         
         weather:
           forecast_data:
@@ -197,7 +195,7 @@ drp_climate_master_v2:
           nobodysin : switch.scene_button_all_out_of_home
 
         apt_windows:
-          state: binary_sensor.
+          state: binary_sensor.home_windows_state
           
         confort_zones: #Apt Human Confort Zone
           summer:
