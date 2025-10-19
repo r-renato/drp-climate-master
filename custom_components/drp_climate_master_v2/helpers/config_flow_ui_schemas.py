@@ -7,7 +7,7 @@ from typing import Any, Mapping
 import voluptuous as vol
 from homeassistant.helpers import selector
 
-from .const import (
+from ..const import (
     CONF_AREAS,
     CONF_DEVICES,
     CONF_SCENARIOS,
