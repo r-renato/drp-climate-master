@@ -39,6 +39,8 @@ from .const import (
     CONF_MAX_TEMP,
     CONF_MIN_TEMP,
     CONF_STEP,
+    CONF_APT_WINDOWS,
+    CONF_CONFORT_ZONES,
     # devices
     CONF_RADIANT,
     CONF_SUPPLY_UNITS,
@@ -59,6 +61,8 @@ from .helpers.config_flow import (
     validate_scenarios,
     validate_historical_data,
     validate_min_max,
+    validate_apt_windows,
+    validate_confort_zones,
 )
 from .helpers.config_flow_entries_payload import yaml_climate_to_entry_payload
 
@@ -132,6 +136,9 @@ class DrpClimateMasterConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_DEVICES: {},
             CONF_SCENARIOS: {},
             CONF_HISTORICAL_DATA: {},
+            CONF_APT_WINDOWS: {},
+            CONF_CONFORT_ZONES: {},
+            CONF_UNITS: str(DEFAULT_UNITS),
             OPT_UPDATE_INTERVAL_S: 30,
             OPT_SUPPORTS_HEATING: True,
             OPT_SUPPORTS_COOLING: False,
@@ -208,6 +215,11 @@ class DrpClimateMasterOptionsFlowHandler(OptionsFlow):
     def __init__(self, entry: config_entries.ConfigEntry) -> None:
         self.entry = entry
 
+    def _entry_title(self, suffix: str) -> str:
+        climate_name = self.entry.data.get(CONF_CLIMATE_NAME)
+        base = f"{INTEGRATION_NAME} - {climate_name}" if climate_name else INTEGRATION_NAME
+        return f"{base} ({suffix})"
+
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> OptionsFlowResult:
         return self.async_show_menu(
             step_id="init",
@@ -226,11 +238,11 @@ class DrpClimateMasterOptionsFlowHandler(OptionsFlow):
     async def async_step_dynamic(self, user_input: dict[str, Any] | None = None) -> OptionsFlowResult:
         cur: Mapping[str, Any] = self.entry.options
         if user_input is None:
-            return self.async_show_form(step_id="dynamic", data_schema=schema_dynamic(cur))
+            return self.async_show_form(step_id="dynamic", data_schema=schema_dynamic(cur, self.entry.data))
 
         err = validate_min_max(user_input[CONF_MIN_TEMP], user_input[CONF_MAX_TEMP])
         if err:
-            return self.async_show_form(step_id="dynamic", data_schema=schema_dynamic(cur), errors={"base": err})
+            return self.async_show_form(step_id="dynamic", data_schema=schema_dynamic(cur, self.entry.data), errors={"base": err})
 
         new_options: Dict[str, Any] = dict(cur)
         new_options.update(
@@ -244,10 +256,14 @@ class DrpClimateMasterOptionsFlowHandler(OptionsFlow):
                 CONF_MAX_TEMP: float(user_input[CONF_MAX_TEMP]),
                 CONF_MIN_TEMP: float(user_input[CONF_MIN_TEMP]),
                 CONF_STEP: float(user_input[CONF_STEP]),
+                CONF_UNITS: str(user_input[CONF_UNITS]),
                 CONF_TEMPERATURE_UNIT: str(user_input[CONF_TEMPERATURE_UNIT]),
             }
         )
-        return self.async_create_entry(title="", data=new_options)
+        new_data: Dict[str, Any] = dict(self.entry.data)
+        new_data[CONF_UNITS] = str(user_input[CONF_UNITS])
+        self.hass.config_entries.async_update_entry(self.entry, data=new_data)
+        return self.async_create_entry(title=self._entry_title("impostazioni dinamiche"), data=new_options)
 
     async def async_step_areas(self, user_input: dict[str, Any] | None = None) -> OptionsFlowResult:
         current = deepcopy(self.entry.options.get(CONF_AREAS, []))
@@ -260,7 +276,7 @@ class DrpClimateMasterOptionsFlowHandler(OptionsFlow):
             return self.async_show_form(step_id="areas", data_schema=schema_areas(current), errors={"base": err})
         new_options: Dict[str, Any] = dict(self.entry.options)
         new_options[CONF_AREAS] = areas
-        return self.async_create_entry(title="", data=new_options)
+        return self.async_create_entry(title=self._entry_title("aree aggiornate"), data=new_options)
 
     async def async_step_radiant(self, user_input: dict[str, Any] | None = None) -> OptionsFlowResult:
         supply, radiant, vmc, extras = split_devices(self.entry.options.get(CONF_DEVICES))
@@ -278,7 +294,7 @@ class DrpClimateMasterOptionsFlowHandler(OptionsFlow):
 
         new_options: Dict[str, Any] = dict(self.entry.options)
         new_options[CONF_DEVICES] = devices
-        return self.async_create_entry(title="", data=new_options)
+        return self.async_create_entry(title=self._entry_title("radiant aggiornato"), data=new_options)
 
     async def async_step_supply_units(self, user_input: dict[str, Any] | None = None) -> OptionsFlowResult:
         supply, radiant, vmc, extras = split_devices(self.entry.options.get(CONF_DEVICES))
@@ -296,7 +312,7 @@ class DrpClimateMasterOptionsFlowHandler(OptionsFlow):
 
         new_options: Dict[str, Any] = dict(self.entry.options)
         new_options[CONF_DEVICES] = devices
-        return self.async_create_entry(title="", data=new_options)
+        return self.async_create_entry(title=self._entry_title("supply units aggiornati"), data=new_options)
 
     async def async_step_vmc(self, user_input: dict[str, Any] | None = None) -> OptionsFlowResult:
         supply, radiant, vmc, extras = split_devices(self.entry.options.get(CONF_DEVICES))
@@ -314,7 +330,7 @@ class DrpClimateMasterOptionsFlowHandler(OptionsFlow):
 
         new_options: Dict[str, Any] = dict(self.entry.options)
         new_options[CONF_DEVICES] = devices
-        return self.async_create_entry(title="", data=new_options)
+        return self.async_create_entry(title=self._entry_title("vmc aggiornato"), data=new_options)
 
     async def async_step_weather(self, user_input: dict[str, Any] | None = None) -> OptionsFlowResult:
         current_weather = deepcopy(self.entry.data.get(CONF_WEATHER, {}))
@@ -333,7 +349,7 @@ class DrpClimateMasterOptionsFlowHandler(OptionsFlow):
         new_data = dict(self.entry.data)
         new_data[CONF_WEATHER] = validated
         self.hass.config_entries.async_update_entry(self.entry, data=new_data)
-        return self.async_create_entry(title="", data=dict(self.entry.options))
+        return self.async_create_entry(title=self._entry_title("meteo aggiornato"), data=dict(self.entry.options))
 
     async def async_step_historical_data(self, user_input: dict[str, Any] | None = None) -> OptionsFlowResult:
         current_hist = deepcopy(self.entry.options.get(CONF_HISTORICAL_DATA, {}))
@@ -350,32 +366,73 @@ class DrpClimateMasterOptionsFlowHandler(OptionsFlow):
 
         new_options: Dict[str, Any] = dict(self.entry.options)
         new_options[CONF_HISTORICAL_DATA] = hist
-        return self.async_create_entry(title="", data=new_options)
+        return self.async_create_entry(title=self._entry_title("dati storici aggiornati"), data=new_options)
 
     async def async_step_advanced(self, user_input: dict[str, Any] | None = None) -> OptionsFlowResult:
         supply, radiant, vmc, extras = split_devices(self.entry.options.get(CONF_DEVICES))
         current_scenarios = deepcopy(self.entry.options.get(CONF_SCENARIOS, {}))
+        current_apt = deepcopy(self.entry.options.get(CONF_APT_WINDOWS, {}))
+        current_confort = deepcopy(self.entry.options.get(CONF_CONFORT_ZONES, {}))
 
         if user_input is None:
-            return self.async_show_form(step_id="advanced", data_schema=schema_advanced(current_scenarios, extras))
+            return self.async_show_form(
+                step_id="advanced",
+                data_schema=schema_advanced(current_scenarios, extras, current_apt, current_confort),
+            )
 
         scenarios = user_input.get(CONF_SCENARIOS, {}) or {}
         if not isinstance(scenarios, dict):
-            return self.async_show_form(step_id="advanced", data_schema=schema_advanced(current_scenarios, extras), errors={"base": "Il blocco scenarios deve essere un oggetto."})
+            return self.async_show_form(
+                step_id="advanced",
+                data_schema=schema_advanced(current_scenarios, extras, current_apt, current_confort),
+                errors={"base": "Il blocco scenarios deve essere un oggetto."},
+            )
         err = validate_scenarios(scenarios)
         if err:
-            return self.async_show_form(step_id="advanced", data_schema=schema_advanced(scenarios, extras), errors={"base": err})
+            return self.async_show_form(
+                step_id="advanced",
+                data_schema=schema_advanced(scenarios, extras, current_apt, current_confort),
+                errors={"base": err},
+            )
+
+        apt_windows = user_input.get(CONF_APT_WINDOWS) or {}
+        err = validate_apt_windows(apt_windows)
+        if err:
+            return self.async_show_form(
+                step_id="advanced",
+                data_schema=schema_advanced(scenarios, extras, apt_windows, current_confort),
+                errors={"base": err},
+            )
+
+        confort_zones = user_input.get(CONF_CONFORT_ZONES) or {}
+        err = validate_confort_zones(confort_zones)
+        if err:
+            return self.async_show_form(
+                step_id="advanced",
+                data_schema=schema_advanced(scenarios, extras, apt_windows, confort_zones),
+                errors={"base": err},
+            )
 
         extra_devices = user_input.get(CONF_DEVICES, {}) or {}
         if not isinstance(extra_devices, dict):
-            return self.async_show_form(step_id="advanced", data_schema=schema_advanced(scenarios, extras), errors={"base": "Il blocco devices deve essere un oggetto."})
+            return self.async_show_form(
+                step_id="advanced",
+                data_schema=schema_advanced(scenarios, extras, apt_windows, confort_zones),
+                errors={"base": "Il blocco devices deve essere un oggetto."},
+            )
 
         devices = assemble_devices(supply, radiant, vmc, extra_devices)
         err = validate_devices(devices)
         if err:
-            return self.async_show_form(step_id="advanced", data_schema=schema_advanced(scenarios, extra_devices), errors={"base": err})
+            return self.async_show_form(
+                step_id="advanced",
+                data_schema=schema_advanced(scenarios, extra_devices, apt_windows, confort_zones),
+                errors={"base": err},
+            )
 
         new_options: Dict[str, Any] = dict(self.entry.options)
         new_options[CONF_SCENARIOS] = scenarios
         new_options[CONF_DEVICES] = devices
-        return self.async_create_entry(title="", data=new_options)
+        new_options[CONF_APT_WINDOWS] = apt_windows
+        new_options[CONF_CONFORT_ZONES] = confort_zones
+        return self.async_create_entry(title=self._entry_title("avanzate aggiornate"), data=new_options)

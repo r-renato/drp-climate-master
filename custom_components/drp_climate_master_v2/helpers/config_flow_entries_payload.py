@@ -26,6 +26,8 @@ from ..const import (
     CONF_STEP,
     DEFAULT_TEMP_UNIT,
     DEFAULT_UNITS,
+    CONF_APT_WINDOWS,
+    CONF_CONFORT_ZONES,
 )
 from ..domain.schema import BASE_CLIMATE_SCHEMA, WEATHER_SCHEMA
 from .config_flow import (
@@ -35,6 +37,8 @@ from .config_flow import (
     validate_scenarios,
     validate_historical_data,
     validate_min_max,
+    validate_apt_windows,
+    validate_confort_zones,
 )
 
 # Opzioni runtime (allineate al runtime_config)
@@ -65,6 +69,8 @@ def yaml_climate_to_entry_payload(hub_name: str, climate: Dict[str, Any]) -> Tup
     historical_data_cfg = normalized_climate.get(CONF_HISTORICAL_DATA, {})
     home_windows_state = normalized_climate.get(CONF_HOME_WINDOWS_STATE)
     weather = normalized_climate.get(CONF_WEATHER)
+    apt_windows = normalized_climate.get(CONF_APT_WINDOWS, {})
+    confort_zones = normalized_climate.get(CONF_CONFORT_ZONES, {})
 
     # Parametri climatici (con default come nello schema)
     max_temp = normalized_climate.get(CONF_MAX_TEMP, 35.0)
@@ -84,6 +90,8 @@ def yaml_climate_to_entry_payload(hub_name: str, climate: Dict[str, Any]) -> Tup
         (validate_devices, devices),
         (validate_scenarios, scenarios),
         (validate_historical_data, historical_data_cfg),
+        (validate_apt_windows, apt_windows),
+        (validate_confort_zones, confort_zones),
     ):
         err = fn(payload)  # type: ignore[arg-type]
         if err:
@@ -111,6 +119,8 @@ def yaml_climate_to_entry_payload(hub_name: str, climate: Dict[str, Any]) -> Tup
         CONF_DEVICES: deepcopy(devices),
         CONF_SCENARIOS: deepcopy(scenarios),
         CONF_HISTORICAL_DATA: deepcopy(historical_data_cfg),
+        CONF_APT_WINDOWS: deepcopy(apt_windows),
+        CONF_CONFORT_ZONES: deepcopy(confort_zones),
         # runtime defaults
         OPT_UPDATE_INTERVAL_S: 30,
         OPT_SUPPORTS_HEATING: True,
@@ -123,5 +133,6 @@ def yaml_climate_to_entry_payload(hub_name: str, climate: Dict[str, Any]) -> Tup
         CONF_MIN_TEMP: float(min_temp),
         CONF_STEP: float(step),
         CONF_TEMPERATURE_UNIT: str(temp_unit),
+        CONF_UNITS: str(units),
     }
     return data, options

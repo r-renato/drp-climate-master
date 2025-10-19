@@ -15,16 +15,20 @@ from .const import (
     CONF_WEATHER,
     CONF_HOME_WINDOWS_STATE,
     CONF_TEMPERATURE_UNIT,
+    CONF_UNITS,
     CONF_MAX_TEMP,
     CONF_MIN_TEMP,
     CONF_STEP,
     DEFAULT_TEMP_UNIT,
+    DEFAULT_UNITS,
     CONF_HUB_NAME,
     CONF_CLIMATE_NAME,
     CONF_CLIMATE_UNIQUE_ID,
     CONF_RADIANT,
     CONF_SUPPLY_UNITS,
     CONF_VMC,
+    CONF_APT_WINDOWS,
+    CONF_CONFORT_ZONES,
 )
 # Opzioni runtime
 OPT_UPDATE_INTERVAL_S = "update_interval_s"
@@ -50,11 +54,18 @@ def schema_user() -> vol.Schema:
         }
     )
 
-def schema_dynamic(cur: Mapping[str, Any]) -> vol.Schema:
-    unit_default = str(cur.get(CONF_TEMPERATURE_UNIT, DEFAULT_TEMP_UNIT)).upper()
+def schema_dynamic(cur: Mapping[str, Any], entry_data: Mapping[str, Any]) -> vol.Schema:
+    units_default = str(cur.get(CONF_UNITS, entry_data.get(CONF_UNITS, "")) or DEFAULT_UNITS)
+    temp_unit_default = str(cur.get(CONF_TEMPERATURE_UNIT, entry_data.get(CONF_TEMPERATURE_UNIT, DEFAULT_TEMP_UNIT)) or DEFAULT_TEMP_UNIT)
+    units_selector = selector.SelectSelector(
+        selector.SelectSelectorConfig(
+            options=["si", "metric", "imperial"],
+            mode=selector.SelectSelectorMode.DROPDOWN,
+        )
+    )
     temp_unit_selector = selector.SelectSelector(
         selector.SelectSelectorConfig(
-            options=["C", "F"],
+            options=["°C", "°F"],
             mode=selector.SelectSelectorMode.DROPDOWN,
         )
     )
@@ -69,7 +80,8 @@ def schema_dynamic(cur: Mapping[str, Any]) -> vol.Schema:
             vol.Required(CONF_MAX_TEMP, default=cur.get(CONF_MAX_TEMP, 35.0)): vol.Coerce(float),
             vol.Required(CONF_MIN_TEMP, default=cur.get(CONF_MIN_TEMP, 5.0)): vol.Coerce(float),
             vol.Required(CONF_STEP, default=cur.get(CONF_STEP, 0.5)): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=2.0)),
-            vol.Required(CONF_TEMPERATURE_UNIT, default=unit_default): temp_unit_selector,
+            vol.Required(CONF_UNITS, default=units_default): units_selector,
+            vol.Required(CONF_TEMPERATURE_UNIT, default=temp_unit_default): temp_unit_selector,
         }
     )
 
@@ -85,10 +97,17 @@ def schema_weather(current: Mapping[str, Any]) -> vol.Schema:
 def schema_historical(current: Mapping[str, Any]) -> vol.Schema:
     return vol.Schema({vol.Required(CONF_HISTORICAL_DATA, default=deepcopy(dict(current))): selector.ObjectSelector()})
 
-def schema_advanced(scenarios: Mapping[str, Any], extras: Mapping[str, Any]) -> vol.Schema:
+def schema_advanced(
+    scenarios: Mapping[str, Any],
+    extras: Mapping[str, Any],
+    apt_windows: Mapping[str, Any],
+    confort_zones: Mapping[str, Any],
+) -> vol.Schema:
     return vol.Schema(
         {
             vol.Required(CONF_SCENARIOS, default=deepcopy(dict(scenarios))): selector.ObjectSelector(),
+            vol.Optional(CONF_APT_WINDOWS, default=deepcopy(dict(apt_windows))): selector.ObjectSelector(),
+            vol.Optional(CONF_CONFORT_ZONES, default=deepcopy(dict(confort_zones))): selector.ObjectSelector(),
             vol.Required(CONF_DEVICES, default=deepcopy(dict(extras))): selector.ObjectSelector(),
         }
     )

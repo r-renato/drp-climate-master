@@ -79,10 +79,13 @@ from ..const import (
     CONF_RADIANT,
     CONF_REQUESTS,
     CONF_SCENARIOS,
+    CONF_APT_WINDOWS,
     CONF_SEASON,
     CONF_SPARE_SETPOINT,
     CONF_SPRING,
     CONF_STEP,
+    CONF_STATE,
+    CONF_CONFORT_ZONES,
     CONF_SUMMER,
     CONF_SUPPLY_UNITS,
     CONF_T_AMBIENT,
@@ -94,6 +97,13 @@ from ..const import (
     CONF_THREE_POINT_MIXING_VALVE,
     CONF_TOKEN,
     CONF_UNITS,
+    CONF_TEMP_MIN,
+    CONF_TEMP_MAX,
+    CONF_HUMI_MIN,
+    CONF_HUMI_MAX,
+    CONF_DP_MIN,
+    CONF_DP_MAX,
+    CONF_SPRINT,
     CONF_URL,
     CONF_VACATION,
     CONF_VALUE,
@@ -128,7 +138,7 @@ AREAS_SCHEMA = vol.Schema(
             }
         ),
         vol.Optional(CONF_TCOLLECTOR): cv.entity_id,
-        vol.Optional(CONF_MQ): cv.positive_int,
+        vol.Optional(CONF_MQ): vol.All(vol.Coerce(float), vol.Range(min=0)),
     }
 )
 
@@ -268,6 +278,36 @@ DEVICES_SCHEMA = vol.Schema(
     }
 )
 
+APT_WINDOWS_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_STATE): cv.entity_id,
+    },
+    extra=vol.ALLOW_EXTRA,
+)
+
+CONFORT_RANGE_SCHEMA = vol.Schema(
+    {
+        vol.Optional(CONF_TEMP_MIN): vol.Coerce(float),
+        vol.Optional(CONF_TEMP_MAX): vol.Coerce(float),
+        vol.Optional(CONF_HUMI_MIN): vol.Coerce(float),
+        vol.Optional(CONF_HUMI_MAX): vol.Coerce(float),
+        vol.Optional(CONF_DP_MIN): vol.Coerce(float),
+        vol.Optional(CONF_DP_MAX): vol.Coerce(float),
+    },
+    extra=vol.ALLOW_EXTRA,
+)
+
+CONFORT_ZONES_SCHEMA = vol.Schema(
+    {
+        vol.Optional(CONF_SUMMER): vol.All(CONFORT_RANGE_SCHEMA),
+        vol.Optional(CONF_AUTUMN): vol.All(CONFORT_RANGE_SCHEMA),
+        vol.Optional(CONF_WINTER): vol.All(CONFORT_RANGE_SCHEMA),
+        vol.Optional(CONF_SPRING): vol.All(CONFORT_RANGE_SCHEMA),
+        vol.Optional(CONF_SPRINT): vol.All(CONFORT_RANGE_SCHEMA),
+    },
+    extra=vol.ALLOW_EXTRA,
+)
+
 WEATHER_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_FORECAST_DATA) : vol.Schema(
@@ -316,6 +356,9 @@ BASE_CLIMATE_SCHEMA = vol.Schema(
         ),
         vol.Optional(CONF_DEVICES): vol.All(DEVICES_SCHEMA),
 
+        vol.Optional(CONF_APT_WINDOWS): vol.All(APT_WINDOWS_SCHEMA),
+        vol.Optional(CONF_CONFORT_ZONES): vol.All(CONFORT_ZONES_SCHEMA),
+
         vol.Required(CONF_HOME_WINDOWS_STATE): cv.entity_id,
         vol.Required(CONF_WEATHER): vol.All(WEATHER_SCHEMA),
         vol.Required(CONF_HISTORICAL_DATA): vol.All(HISTORICAL_DATA_SCHEMA),
@@ -324,8 +367,9 @@ BASE_CLIMATE_SCHEMA = vol.Schema(
                 vol.Required(CONF_VACATION): cv.string,
                 vol.Required(CONF_NOBODYSIN): cv.string,
             }
-        )
-    }
+        ),
+    },
+    extra=vol.ALLOW_EXTRA,
 )
 
 CLIMATE_SCHEMA = vol.Schema(
