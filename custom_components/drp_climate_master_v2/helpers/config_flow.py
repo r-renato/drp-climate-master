@@ -2,37 +2,43 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Mapping, Dict, Optional
+from typing import Any, Dict, Mapping, Optional, Tuple
+
 import voluptuous as vol
 
-from homeassistant.const import (
-    CONF_NAME,
-)
+from homeassistant.const import CONF_NAME
 
 from ..const import (
     CONF_AREA,
-    CONF_TEMPERATURE,
-    CONF_HUMIDITY,
-    CONF_VACATION,
-    CONF_NOBODYSIN,
-    CONF_SUPPLY_UNITS,
-    CONF_RADIANT,
-    CONF_VMC,
+    CONF_APT_WINDOWS,
+    CONF_CONFORT_ZONES,
+    CONF_DP_MAX,
+    CONF_DP_MIN,
     CONF_HISTORICAL_DATA,
+    CONF_HUMIDITY,
+    CONF_HUMI_MAX,
+    CONF_HUMI_MIN,
     CONF_LATITUDE,
     CONF_LONGITUDE,
-    CONF_APT_WINDOWS,
+    CONF_NOBODYSIN,
+    CONF_RADIANT,
     CONF_STATE,
-    CONF_CONFORT_ZONES,
-    CONF_TEMP_MIN,
+    CONF_SUPPLY_UNITS,
     CONF_TEMP_MAX,
-    CONF_HUMI_MIN,
-    CONF_HUMI_MAX,
-    CONF_DP_MIN,
-    CONF_DP_MAX,
+    CONF_TEMP_MIN,
+    CONF_TEMPERATURE,
+    CONF_TOKEN,
+    CONF_VACATION,
+    CONF_VMC,
 )
 
-from ..domain.schema import HISTORICAL_DATA_SCHEMA, WEATHER_SCHEMA
+from ..domain.schema import (
+    HISTORICAL_DATA_SCHEMA,
+    RADIANT_SCHEMA,
+    SUPPLY_UNITS_SCHEMA,
+    VMC_SCHEMA,
+    WEATHER_SCHEMA,
+)
 
 def normalize_yaml_hub(hub: Dict[str, Any]) -> Dict[str, Any]:
     """Normalizza un blocco HUB della YAML in un oggetto coerente."""
@@ -94,6 +100,8 @@ def validate_areas(areas: list[dict]) -> Optional[str]:
     """Ogni area con sensors.temperature & sensors.humidity (obbligatori)."""
     if not isinstance(areas, list):
         return "Il campo 'areas' deve essere una lista."
+    if not areas:
+        return "Devi configurare almeno un'area."
     seen: set[str] = set()
     for a in areas:
         if not isinstance(a, dict):
@@ -111,18 +119,46 @@ def validate_areas(areas: list[dict]) -> Optional[str]:
             return f"L'area '{n}' deve avere sensors.temperature E sensors.humidity."
     return None
 
-def validate_devices(dev: dict) -> Optional[str]:
-    """
-    Validazione minima dei blocchi devices (coerenze profonde demandate al runtime builder).
-    Accetta dict oppure None (nessun devices).
-    """
-    if dev is None:
-        return None
-    if not isinstance(dev, dict):
-        return "Il campo 'devices' deve essere un oggetto."
-    for blk in ("supply_units", "radiant", "vmc"):
-        if blk in dev and not isinstance(dev[blk], dict):
-            return f"'devices.{blk}' deve essere un oggetto."
+def _validate_device_block(schema: vol.Schema, payload: Mapping[str, Any], label: str) -> Optional[str]:
+    try:
+        schema(payload)
+    except vol.Invalid as err:
+        return f"'{label}' non valido: {err}"
+    return None
+
+
+def validate_devices(dev: dict | None) -> Optional[str]:
+    """Valida la struttura dei devices assicurando la presenza delle supply units."""
+    if not isinstance(dev, dict) or not dev:
+        return "Il blocco 'devices' deve essere un oggetto non vuoto."
+
+    supply = dev.get(CONF_SUPPLY_UNITS)
+    if not isinstance(supply, dict) or not supply:
+        return "Il blocco 'devices.supply_units' è obbligatorio."
+
+    err = _validate_device_block(SUPPLY_UNITS_SCHEMA, supply, "devices.supply_units")
+    if err:
+        return err
+
+    for key, schema in (
+        (CONF_RADIANT, RADIANT_SCHEMA),
+        (CONF_VMC, VMC_SCHEMA),
+    ):
+        block = dev.get(key)
+        if block in (None, {}):
+            continue
+        if not isinstance(block, dict):
+            return f"'devices.{key}' deve essere un oggetto."
+        err = _validate_device_block(schema, block, f"devices.{key}")
+        if err:
+            return err
+
+    for extra_key, extra_payload in dev.items():
+        if extra_key in (CONF_SUPPLY_UNITS, CONF_RADIANT, CONF_VMC):
+            continue
+        if not isinstance(extra_payload, dict):
+            return f"'devices.{extra_key}' deve essere un oggetto."
+
     return None
 
 def validate_apt_windows(apt: dict | None) -> Optional[str]:
@@ -185,10 +221,25 @@ def validate_min_max(min_temp: Any, max_temp: Any) -> Optional[str]:
         return "min_temp deve essere < max_temp."
     return None
 
-def ensure_weather_mapping(candidate: Mapping[str, Any]) -> dict:
-    """Valida/normalizza un mapping weather rispetto a WEATHER_SCHEMA."""
+def normalize_weather_block(candidate: Any) -> Tuple[Optional[str], dict[str, Any]]:
+    """Valida e normalizza il blocco weather, assicurando i campi obbligatori."""
+    if not isinstance(candidate, Mapping):
+        return "Il blocco 'weather' deve essere un oggetto.", {}
+
     try:
         validated = WEATHER_SCHEMA(candidate)
-        return dict(validated)
-    except vol.Invalid as e:
-        raise ValueError(f"Weather non valido: {e}") from e
+    except vol.Invalid as err:
+        return f"'weather' non valido: {err}", {}
+
+    historical = dict(validated.get(CONF_HISTORICAL_DATA, {}))
+    missing = [key for key in (CONF_TOKEN, CONF_LATITUDE, CONF_LONGITUDE) if not historical.get(key)]
+    if missing:
+        joined = ", ".join(missing)
+        return f"'weather.historical_data' deve includere: {joined}.", {}
+
+    try:
+        normalized = coerce_weather_latlon(dict(validated))
+    except (TypeError, ValueError) as err:
+        return f"Coordinate lat/lon non valide: {err}", {}
+
+    return None, normalized

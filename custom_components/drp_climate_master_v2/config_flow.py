@@ -4,11 +4,8 @@ from __future__ import annotations
 import logging
 from copy import deepcopy
 from typing import Any, Dict, Mapping
-
-import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
-from homeassistant.helpers import selector
 from homeassistant.config_entries import SOURCE_IMPORT
 from homeassistant.const import CONF_TEMPERATURE_UNIT
 
@@ -50,12 +47,11 @@ from .const import (
     CONF_CLIMATE_NAME,
     CONF_CLIMATE_UNIQUE_ID,
 )
-from .domain.schema import WEATHER_SCHEMA
 from .helpers.config_flow import (
     normalize_yaml_hub,
+    normalize_weather_block,
     split_devices,
     assemble_devices,
-    coerce_weather_latlon,
     validate_areas,
     validate_devices,
     validate_scenarios,
@@ -67,6 +63,12 @@ from .helpers.config_flow import (
 from .helpers.config_flow_entries_payload import yaml_climate_to_entry_payload
 
 from .helpers.config_flow_ui_schemas import (
+    OPT_MANUAL_OVERRIDE_MIN,
+    OPT_SETPOINT_STEP_C,
+    OPT_SUPPORTS_COOLING,
+    OPT_SUPPORTS_DEHUMIDIFYING,
+    OPT_SUPPORTS_HEATING,
+    OPT_UPDATE_INTERVAL_S,
     schema_user,
     schema_dynamic,
     schema_areas,
@@ -88,50 +90,50 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class DrpClimateMasterConfigFlow(ConfigFlow, domain=DOMAIN):
-    """Config Flow: solo UI orchestration e gestione import."""
+    """Config Flow: orchestrazione UI e gestione import."""
 
     VERSION = 2
 
+    def __init__(self) -> None:
+        self._entry_data: dict[str, Any] = {}
+        self._entry_options: dict[str, Any] = {}
+
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """STEP: user — crea la entry con campi base e riferimenti globali."""
+        """STEP: user — raccoglie le informazioni principali dell'impianto."""
         if user_input is None:
+            self._entry_data = {}
+            self._entry_options = {}
             return self.async_show_form(step_id="user", data_schema=schema_user())
 
         hub_name = user_input[CONF_HUB_NAME]
         climate_name = user_input[CONF_CLIMATE_NAME]
         unique_id = user_input[CONF_CLIMATE_UNIQUE_ID]
         home_windows = user_input[CONF_HOME_WINDOWS_STATE]
-
-        # mappatura da entity weather.* a mapping minimo compatibile con WEATHER_SCHEMA
         weather_entity = user_input[CONF_WEATHER]
-        weather_block = {
-            "forecast_data": {"provider": str(weather_entity)},
-            "historical_data": {"provider": "pirateweather"},
-        }
-
-        # valida mapping
-        try:
-            weather_block = WEATHER_SCHEMA(weather_block)
-        except vol.Invalid as e:
-            return self.async_show_form(
-                step_id="user",
-                data_schema=schema_user(),
-                errors={"base": f"Weather non valido: {e}"},
-            )
 
         if unique_id:
             await self.async_set_unique_id(unique_id)
             self._abort_if_unique_id_configured()
 
-        data = {
+        self._entry_data = {
             CONF_HUB_NAME: hub_name,
             CONF_CLIMATE_NAME: climate_name,
             CONF_CLIMATE_UNIQUE_ID: unique_id,
             CONF_HOME_WINDOWS_STATE: home_windows,
-            CONF_WEATHER: dict(weather_block),
+            CONF_WEATHER: {
+                "forecast_data": {"provider": str(weather_entity)},
+                "historical_data": {
+                    "provider": "pirateweather",
+                    "token": "",
+                    "latitude": "",
+                    "longitude": "",
+                },
+            },
             CONF_UNITS: str(DEFAULT_UNITS),
+            CONF_TEMPERATURE_UNIT: str(DEFAULT_TEMP_UNIT),
         }
-        options = {
+
+        self._entry_options = {
             CONF_AREAS: [],
             CONF_DEVICES: {},
             CONF_SCENARIOS: {},
@@ -143,8 +145,274 @@ class DrpClimateMasterConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_MIN_TEMP: 5.0,
             CONF_STEP: 0.5,
             CONF_TEMPERATURE_UNIT: str(DEFAULT_TEMP_UNIT),
+            OPT_UPDATE_INTERVAL_S: 30,
+            OPT_SUPPORTS_HEATING: True,
+            OPT_SUPPORTS_COOLING: False,
+            OPT_SUPPORTS_DEHUMIDIFYING: False,
+            OPT_SETPOINT_STEP_C: 0.5,
+            OPT_MANUAL_OVERRIDE_MIN: 90,
         }
-        return self.async_create_entry(title=f"{INTEGRATION_NAME} - {climate_name}", data=data, options=options)
+
+        return await self.async_step_dynamic()
+
+    async def async_step_dynamic(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """STEP: dynamic — parametri climatici generali."""
+        if user_input is None:
+            return self.async_show_form(
+                step_id="dynamic",
+                data_schema=schema_dynamic(self._entry_options, self._entry_data),
+            )
+
+        err = validate_min_max(user_input[CONF_MIN_TEMP], user_input[CONF_MAX_TEMP])
+        if err:
+            return self.async_show_form(
+                step_id="dynamic",
+                data_schema=schema_dynamic(self._entry_options, self._entry_data),
+                errors={"base": err},
+            )
+
+        new_options: Dict[str, Any] = dict(self._entry_options)
+        new_options.update(
+            {
+                OPT_UPDATE_INTERVAL_S: user_input[OPT_UPDATE_INTERVAL_S],
+                OPT_SUPPORTS_HEATING: user_input[OPT_SUPPORTS_HEATING],
+                OPT_SUPPORTS_COOLING: user_input[OPT_SUPPORTS_COOLING],
+                OPT_SUPPORTS_DEHUMIDIFYING: user_input[OPT_SUPPORTS_DEHUMIDIFYING],
+                OPT_SETPOINT_STEP_C: float(user_input[OPT_SETPOINT_STEP_C]),
+                OPT_MANUAL_OVERRIDE_MIN: user_input[OPT_MANUAL_OVERRIDE_MIN],
+                CONF_MAX_TEMP: float(user_input[CONF_MAX_TEMP]),
+                CONF_MIN_TEMP: float(user_input[CONF_MIN_TEMP]),
+                CONF_STEP: float(user_input[CONF_STEP]),
+                CONF_UNITS: str(user_input[CONF_UNITS]),
+                CONF_TEMPERATURE_UNIT: str(user_input[CONF_TEMPERATURE_UNIT]),
+            }
+        )
+
+        self._entry_options = new_options
+        self._entry_data[CONF_UNITS] = str(user_input[CONF_UNITS])
+        self._entry_data[CONF_TEMPERATURE_UNIT] = str(user_input[CONF_TEMPERATURE_UNIT])
+
+        return await self.async_step_areas()
+
+    async def async_step_areas(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """STEP: areas — configurazione delle zone."""
+        current = deepcopy(self._entry_options.get(CONF_AREAS, []))
+        if user_input is None:
+            return self.async_show_form(step_id="areas", data_schema=schema_areas(current))
+
+        areas = user_input.get(CONF_AREAS, [])
+        err = validate_areas(areas)
+        if err:
+            return self.async_show_form(
+                step_id="areas",
+                data_schema=schema_areas(current),
+                errors={"base": err},
+            )
+
+        self._entry_options[CONF_AREAS] = areas
+        return await self.async_step_supply_units()
+
+    async def async_step_supply_units(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """STEP: supply_units — configurazione del generatore."""
+        supply, radiant, vmc, extras = split_devices(self._entry_options.get(CONF_DEVICES))
+        if user_input is None:
+            return self.async_show_form(
+                step_id="supply_units",
+                data_schema=schema_device(CONF_SUPPLY_UNITS, supply),
+            )
+
+        new_supply = user_input.get(CONF_SUPPLY_UNITS, {}) or {}
+        if not isinstance(new_supply, dict):
+            return self.async_show_form(
+                step_id="supply_units",
+                data_schema=schema_device(CONF_SUPPLY_UNITS, supply),
+                errors={"base": "Il blocco supply_units deve essere un oggetto."},
+            )
+
+        devices = assemble_devices(new_supply, radiant, vmc, extras)
+        err = validate_devices(devices)
+        if err:
+            return self.async_show_form(
+                step_id="supply_units",
+                data_schema=schema_device(CONF_SUPPLY_UNITS, new_supply),
+                errors={"base": err},
+            )
+
+        self._entry_options[CONF_DEVICES] = devices
+        return await self.async_step_radiant()
+
+    async def async_step_radiant(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """STEP: radiant — configurazione radiante (opzionale)."""
+        supply, radiant, vmc, extras = split_devices(self._entry_options.get(CONF_DEVICES))
+        if user_input is None:
+            return self.async_show_form(
+                step_id="radiant",
+                data_schema=schema_device(CONF_RADIANT, radiant),
+            )
+
+        new_radiant = user_input.get(CONF_RADIANT, {}) or {}
+        if not isinstance(new_radiant, dict):
+            return self.async_show_form(
+                step_id="radiant",
+                data_schema=schema_device(CONF_RADIANT, radiant),
+                errors={"base": "Il blocco radiant deve essere un oggetto."},
+            )
+
+        devices = assemble_devices(supply, new_radiant, vmc, extras)
+        err = validate_devices(devices)
+        if err:
+            return self.async_show_form(
+                step_id="radiant",
+                data_schema=schema_device(CONF_RADIANT, new_radiant),
+                errors={"base": err},
+            )
+
+        self._entry_options[CONF_DEVICES] = devices
+        return await self.async_step_vmc()
+
+    async def async_step_vmc(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """STEP: vmc — configurazione ventilazione meccanica (opzionale)."""
+        supply, radiant, vmc, extras = split_devices(self._entry_options.get(CONF_DEVICES))
+        if user_input is None:
+            return self.async_show_form(step_id="vmc", data_schema=schema_device(CONF_VMC, vmc))
+
+        new_vmc = user_input.get(CONF_VMC, {}) or {}
+        if not isinstance(new_vmc, dict):
+            return self.async_show_form(
+                step_id="vmc",
+                data_schema=schema_device(CONF_VMC, vmc),
+                errors={"base": "Il blocco vmc deve essere un oggetto."},
+            )
+
+        devices = assemble_devices(supply, radiant, new_vmc, extras)
+        err = validate_devices(devices)
+        if err:
+            return self.async_show_form(
+                step_id="vmc",
+                data_schema=schema_device(CONF_VMC, new_vmc),
+                errors={"base": err},
+            )
+
+        self._entry_options[CONF_DEVICES] = devices
+        return await self.async_step_weather()
+
+    async def async_step_weather(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """STEP: weather — configurazione dati meteo."""
+        current_weather = deepcopy(self._entry_data.get(CONF_WEATHER, {}))
+        if user_input is None:
+            return self.async_show_form(step_id="weather", data_schema=schema_weather(current_weather))
+
+        weather_cfg = user_input.get(CONF_WEATHER, {}) or {}
+        error, normalized = normalize_weather_block(weather_cfg)
+        if error:
+            return self.async_show_form(
+                step_id="weather",
+                data_schema=schema_weather(weather_cfg),
+                errors={"base": error},
+            )
+
+        self._entry_data[CONF_WEATHER] = normalized
+        return await self.async_step_historical_data()
+
+    async def async_step_historical_data(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """STEP: historical_data — configurazione sorgenti storiche esterne."""
+        current_hist = deepcopy(self._entry_options.get(CONF_HISTORICAL_DATA, {}))
+        if user_input is None:
+            return self.async_show_form(
+                step_id="historical_data",
+                data_schema=schema_historical(current_hist),
+            )
+
+        hist = user_input.get(CONF_HISTORICAL_DATA, {}) or {}
+        if not isinstance(hist, dict):
+            return self.async_show_form(
+                step_id="historical_data",
+                data_schema=schema_historical(current_hist),
+                errors={"base": "Il blocco historical_data deve essere un oggetto."},
+            )
+
+        err = validate_historical_data(hist)
+        if err:
+            return self.async_show_form(
+                step_id="historical_data",
+                data_schema=schema_historical(hist),
+                errors={"base": err},
+            )
+
+        self._entry_options[CONF_HISTORICAL_DATA] = hist
+        return await self.async_step_advanced()
+
+    async def async_step_advanced(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """STEP: advanced — scenari, finestre e device aggiuntivi."""
+        supply, radiant, vmc, extras = split_devices(self._entry_options.get(CONF_DEVICES))
+        current_scenarios = deepcopy(self._entry_options.get(CONF_SCENARIOS, {}))
+        current_apt = deepcopy(self._entry_options.get(CONF_APT_WINDOWS, {}))
+        current_confort = deepcopy(self._entry_options.get(CONF_CONFORT_ZONES, {}))
+
+        if user_input is None:
+            return self.async_show_form(
+                step_id="advanced",
+                data_schema=schema_advanced(current_scenarios, extras, current_apt, current_confort),
+            )
+
+        scenarios = user_input.get(CONF_SCENARIOS, {}) or {}
+        if not isinstance(scenarios, dict):
+            return self.async_show_form(
+                step_id="advanced",
+                data_schema=schema_advanced(current_scenarios, extras, current_apt, current_confort),
+                errors={"base": "Il blocco scenarios deve essere un oggetto."},
+            )
+        err = validate_scenarios(scenarios)
+        if err:
+            return self.async_show_form(
+                step_id="advanced",
+                data_schema=schema_advanced(scenarios, extras, current_apt, current_confort),
+                errors={"base": err},
+            )
+
+        apt_windows = user_input.get(CONF_APT_WINDOWS) or {}
+        err = validate_apt_windows(apt_windows)
+        if err:
+            return self.async_show_form(
+                step_id="advanced",
+                data_schema=schema_advanced(scenarios, extras, apt_windows, current_confort),
+                errors={"base": err},
+            )
+
+        confort_zones = user_input.get(CONF_CONFORT_ZONES) or {}
+        err = validate_confort_zones(confort_zones)
+        if err:
+            return self.async_show_form(
+                step_id="advanced",
+                data_schema=schema_advanced(scenarios, extras, apt_windows, confort_zones),
+                errors={"base": err},
+            )
+
+        extra_devices = user_input.get(CONF_DEVICES, {}) or {}
+        if not isinstance(extra_devices, dict):
+            return self.async_show_form(
+                step_id="advanced",
+                data_schema=schema_advanced(scenarios, extras, apt_windows, confort_zones),
+                errors={"base": "Il blocco devices deve essere un oggetto."},
+            )
+
+        devices = assemble_devices(supply, radiant, vmc, extra_devices)
+        err = validate_devices(devices)
+        if err:
+            return self.async_show_form(
+                step_id="advanced",
+                data_schema=schema_advanced(scenarios, extra_devices, apt_windows, confort_zones),
+                errors={"base": err},
+            )
+
+        self._entry_options[CONF_SCENARIOS] = scenarios
+        self._entry_options[CONF_DEVICES] = devices
+        self._entry_options[CONF_APT_WINDOWS] = apt_windows
+        self._entry_options[CONF_CONFORT_ZONES] = confort_zones
+
+        climate_name = self._entry_data.get(CONF_CLIMATE_NAME, "")
+        title = f"{INTEGRATION_NAME} - {climate_name}" if climate_name else INTEGRATION_NAME
+        return self.async_create_entry(title=title, data=self._entry_data, options=self._entry_options)
 
     async def async_step_import(self, import_config: Dict[str, Any]) -> ConfigFlowResult:
         """STEP: import — converte YAML → ConfigEntry, evitando duplicati."""
@@ -241,12 +509,22 @@ class DrpClimateMasterOptionsFlowHandler(OptionsFlow):
         new_options: Dict[str, Any] = dict(cur)
         new_options.update(
             {
+                OPT_UPDATE_INTERVAL_S: user_input[OPT_UPDATE_INTERVAL_S],
+                OPT_SUPPORTS_HEATING: user_input[OPT_SUPPORTS_HEATING],
+                OPT_SUPPORTS_COOLING: user_input[OPT_SUPPORTS_COOLING],
+                OPT_SUPPORTS_DEHUMIDIFYING: user_input[OPT_SUPPORTS_DEHUMIDIFYING],
+                OPT_SETPOINT_STEP_C: float(user_input[OPT_SETPOINT_STEP_C]),
+                OPT_MANUAL_OVERRIDE_MIN: user_input[OPT_MANUAL_OVERRIDE_MIN],
+                CONF_MAX_TEMP: float(user_input[CONF_MAX_TEMP]),
+                CONF_MIN_TEMP: float(user_input[CONF_MIN_TEMP]),
+                CONF_STEP: float(user_input[CONF_STEP]),
                 CONF_UNITS: str(user_input[CONF_UNITS]),
                 CONF_TEMPERATURE_UNIT: str(user_input[CONF_TEMPERATURE_UNIT]),
             }
         )
         new_data: Dict[str, Any] = dict(self.entry.data)
         new_data[CONF_UNITS] = str(user_input[CONF_UNITS])
+        new_data[CONF_TEMPERATURE_UNIT] = str(user_input[CONF_TEMPERATURE_UNIT])
         self.hass.config_entries.async_update_entry(self.entry, data=new_data)
         return self.async_create_entry(title=self._entry_title("impostazioni dinamiche"), data=new_options)
 
@@ -324,15 +602,22 @@ class DrpClimateMasterOptionsFlowHandler(OptionsFlow):
 
         weather_cfg = user_input.get(CONF_WEATHER, {}) or {}
         if not isinstance(weather_cfg, dict):
-            return self.async_show_form(step_id="weather", data_schema=schema_weather(current_weather), errors={"base": "Il blocco weather deve essere un oggetto."})
-        try:
-            validated = WEATHER_SCHEMA(weather_cfg)
-            validated = coerce_weather_latlon(dict(validated))
-        except Exception as err:
-            return self.async_show_form(step_id="weather", data_schema=schema_weather(weather_cfg), errors={"base": str(err)})
+            return self.async_show_form(
+                step_id="weather",
+                data_schema=schema_weather(current_weather),
+                errors={"base": "Il blocco weather deve essere un oggetto."},
+            )
+
+        error, normalized = normalize_weather_block(weather_cfg)
+        if error:
+            return self.async_show_form(
+                step_id="weather",
+                data_schema=schema_weather(weather_cfg),
+                errors={"base": error},
+            )
 
         new_data = dict(self.entry.data)
-        new_data[CONF_WEATHER] = validated
+        new_data[CONF_WEATHER] = normalized
         self.hass.config_entries.async_update_entry(self.entry, data=new_data)
         return self.async_create_entry(title=self._entry_title("meteo aggiornato"), data=dict(self.entry.options))
 
