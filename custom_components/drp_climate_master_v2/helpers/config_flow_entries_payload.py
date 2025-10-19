@@ -29,9 +29,9 @@ from ..const import (
     CONF_APT_WINDOWS,
     CONF_CONFORT_ZONES,
 )
-from ..domain.schema import BASE_CLIMATE_SCHEMA, WEATHER_SCHEMA
+from ..domain.schema import BASE_CLIMATE_SCHEMA
 from .config_flow import (
-    coerce_weather_latlon,
+    normalize_weather_block,
     validate_areas,
     validate_devices,
     validate_scenarios,
@@ -102,8 +102,10 @@ def yaml_climate_to_entry_payload(hub_name: str, climate: Dict[str, Any]) -> Tup
         raise ValueError(err)
 
     # Valida lo shape di weather e normalizza lat/lon
-    weather = WEATHER_SCHEMA(weather)
-    weather = coerce_weather_latlon(dict(weather))
+    weather_error, normalized_weather = normalize_weather_block(weather)
+    if weather_error:
+        raise ValueError(weather_error)
+    weather = normalized_weather
 
     data: Dict[str, Any] = {
         CONF_HUB_NAME: hub_name,
