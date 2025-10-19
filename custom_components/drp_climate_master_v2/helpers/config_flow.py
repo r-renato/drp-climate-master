@@ -21,6 +21,15 @@ from ..const import (
     CONF_HISTORICAL_DATA,
     CONF_LATITUDE,
     CONF_LONGITUDE,
+    CONF_APT_WINDOWS,
+    CONF_STATE,
+    CONF_CONFORT_ZONES,
+    CONF_TEMP_MIN,
+    CONF_TEMP_MAX,
+    CONF_HUMI_MIN,
+    CONF_HUMI_MAX,
+    CONF_DP_MIN,
+    CONF_DP_MAX,
 )
 
 from ..domain.schema import HISTORICAL_DATA_SCHEMA, WEATHER_SCHEMA
@@ -114,6 +123,32 @@ def validate_devices(dev: dict) -> Optional[str]:
     for blk in ("supply_units", "radiant", "vmc"):
         if blk in dev and not isinstance(dev[blk], dict):
             return f"'devices.{blk}' deve essere un oggetto."
+    return None
+
+def validate_apt_windows(apt: dict | None) -> Optional[str]:
+    """Valida il blocco opzionale apt_windows."""
+    if apt in (None, {}):
+        return None
+    if not isinstance(apt, dict):
+        return "Il campo 'apt_windows' deve essere un oggetto."
+    state = apt.get(CONF_STATE)
+    if state is not None and not isinstance(state, str):
+        return "'apt_windows.state' deve essere una stringa."
+    return None
+
+def validate_confort_zones(confort: dict | None) -> Optional[str]:
+    """Valida il blocco opzionale confort_zones."""
+    if confort in (None, {}):
+        return None
+    if not isinstance(confort, dict):
+        return "Il campo 'confort_zones' deve essere un oggetto."
+    allowed_keys = {CONF_TEMP_MIN, CONF_TEMP_MAX, CONF_HUMI_MIN, CONF_HUMI_MAX, CONF_DP_MIN, CONF_DP_MAX}
+    for season, payload in confort.items():
+        if not isinstance(payload, dict):
+            return f"'confort_zones.{season}' deve essere un oggetto."
+        for key, value in payload.items():
+            if key in allowed_keys and not isinstance(value, (int, float)):
+                return f"'confort_zones.{season}.{key}' deve essere numerico."
     return None
 
 def validate_scenarios(sc: dict) -> Optional[str]:
