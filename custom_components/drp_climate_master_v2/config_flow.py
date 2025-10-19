@@ -29,7 +29,6 @@ from .const import (
     CONF_UNITS,
     CONF_WEATHER,
     CONF_HISTORICAL_DATA,
-    CONF_HOME_WINDOWS_STATE,
     CONF_AREAS,
     CONF_DEVICES,
     CONF_SCENARIOS,
@@ -38,6 +37,7 @@ from .const import (
     CONF_STEP,
     CONF_APT_WINDOWS,
     CONF_CONFORT_ZONES,
+    CONF_STATE,
     # devices
     CONF_RADIANT,
     CONF_SUPPLY_UNITS,
@@ -108,7 +108,7 @@ class DrpClimateMasterConfigFlow(ConfigFlow, domain=DOMAIN):
         hub_name = user_input[CONF_HUB_NAME]
         climate_name = user_input[CONF_CLIMATE_NAME]
         unique_id = user_input[CONF_CLIMATE_UNIQUE_ID]
-        home_windows = user_input[CONF_HOME_WINDOWS_STATE]
+        apt_windows_state = user_input[CONF_APT_WINDOWS]
         weather_entity = user_input[CONF_WEATHER]
 
         if unique_id:
@@ -119,7 +119,6 @@ class DrpClimateMasterConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_HUB_NAME: hub_name,
             CONF_CLIMATE_NAME: climate_name,
             CONF_CLIMATE_UNIQUE_ID: unique_id,
-            CONF_HOME_WINDOWS_STATE: home_windows,
             CONF_WEATHER: {
                 "forecast_data": {"provider": str(weather_entity)},
                 "historical_data": {
@@ -138,7 +137,7 @@ class DrpClimateMasterConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_DEVICES: {},
             CONF_SCENARIOS: {},
             CONF_HISTORICAL_DATA: {},
-            CONF_APT_WINDOWS: {},
+            CONF_APT_WINDOWS: {CONF_STATE: str(apt_windows_state)},
             CONF_CONFORT_ZONES: {},
             CONF_UNITS: str(DEFAULT_UNITS),
             CONF_MAX_TEMP: 35.0,

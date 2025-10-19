@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import List
+from typing import List, Optional
 from datetime import datetime
 
 from .logger import exc_one_line, log_debug, log_warning
@@ -245,6 +245,18 @@ def take_plant_snapshot(
         humidity=terrace_area.sensors.humidity if terrace_area and terrace_area.sensors else None,
     )
 
+    apt_windows_open: Optional[bool] = None
+    if runtime_config.climate.apt_windows and runtime_config.climate.apt_windows.state:
+        apt_windows_open = (
+            as_bool(
+                get_entity_value(
+                    entities_state,
+                    runtime_config.climate.apt_windows.state,
+                )
+            )
+            or False
+        )
+
     return make_class(
         PlantSnapshot,
         timestamp=timestamp,
@@ -258,7 +270,7 @@ def take_plant_snapshot(
         supply_unit=_build_supply_unit_snapshot(runtime_config, timestamp),
         vmc=_build_vmc_snapshot(runtime_config, timestamp),
 
-        home_windows_state=as_bool(get_entity_value(entities_state, runtime_config.climate.home_windows_state)) or False,
+        apt_windows_open=apt_windows_open,
         presence_vacation=as_bool(get_entity_value(entities_state, runtime_config.climate.scenarios.vacation)) or False,
         presence_nobodysin=as_bool(get_entity_value(entities_state, runtime_config.climate.scenarios.nobodysin)) or False,
     )

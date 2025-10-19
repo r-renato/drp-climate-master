@@ -618,7 +618,7 @@ class SeasonThresholdStrategy:
         temp_spread = (max(zone_temps) - min(zone_temps)) if len(zone_temps) >= 2 else 0.0
         half_range = base_half_range + min(temp_spread * 0.25, 0.5)
 
-        if snapshot.home_windows_state:
+        if snapshot.apt_windows_open:
             half_range += 0.2
 
         if profile is HVACOperatingProfile.VACATION:

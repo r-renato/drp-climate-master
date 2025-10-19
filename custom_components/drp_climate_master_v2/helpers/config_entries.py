@@ -28,6 +28,7 @@ from ..domain.models.runtime_schema import (
     DevicesConfig,
     ForecastDataConfig,
     HistoricalDataConfig,
+    AptWindowsConfig,
     ModeConfig,
     PlantCapabilities,
     RadiantConfig,
@@ -68,7 +69,6 @@ from ..const import (
     CONF_HEATING_DT_SETPOINT,
     CONF_HEATING_T_SETPOINT,
     CONF_HISTORICAL_DATA,
-    CONF_HOME_WINDOWS_STATE,
     CONF_INDOOR,
     CONF_LATITUDE,
     CONF_LONGITUDE,
@@ -81,12 +81,15 @@ from ..const import (
     CONF_SCENARIOS,
     CONF_SEASON,
     CONF_SPARE_SETPOINT,
+    CONF_APT_WINDOWS,
     CONF_SUPPLY_UNITS,
     CONF_T_SETPOINT,
     CONF_TCOLLECTOR,
     CONF_THREE_POINT_MIXING_VALVE,
     CONF_TOKEN,
     CONF_UNITS,
+    CONF_STATE,
+    CONF_HOME_WINDOWS_STATE,
     CONF_VENT_RECIRCULATION,
     CONF_VMC,
     CONF_WEATHER,
@@ -294,6 +297,18 @@ def build_runtime_config(entry: ConfigEntry) -> RuntimeConfig:
         longitude=float(h[CONF_LONGITUDE]),
     )
 
+    apt_windows_cfg = climate_cfg.get(CONF_APT_WINDOWS) if isinstance(climate_cfg, Mapping) else None
+    apt_windows = None
+    if isinstance(apt_windows_cfg, Mapping):
+        state = apt_windows_cfg.get(CONF_STATE)
+        if isinstance(state, str) and state.strip():
+            apt_windows = AptWindowsConfig(state=str(state).strip())
+
+    if apt_windows is None:
+        legacy_state = entry.data.get(CONF_HOME_WINDOWS_STATE)
+        if isinstance(legacy_state, str) and legacy_state.strip():
+            apt_windows = AptWindowsConfig(state=str(legacy_state).strip())
+
     climate = ClimateConfig(
         name=entry.data["climate_name"],
         unique_id=entry.data["climate_unique_id"],
@@ -302,7 +317,7 @@ def build_runtime_config(entry: ConfigEntry) -> RuntimeConfig:
         devices=DevicesConfig(
             supply_units=supply_units, radiant=radiant, vmc=vmc
         ),
-        home_windows_state=entry.data[CONF_HOME_WINDOWS_STATE],
+        apt_windows=apt_windows,
         # weather=entry.data[CONF_WEATHER],
         weather=WeatherConfig(forecast_data=fd, historical_data=hd),
         scenarios=ScenariosConfig(**climate_cfg[CONF_SCENARIOS]),
@@ -415,8 +430,8 @@ def collect_entity_ids_for_state_changes(runtime: "RuntimeConfig") -> list[str]:
         _walk(getattr(vmc, "sensors", None))
         _walk(getattr(vmc, "alarms", None))
 
-    # --- HOME WINDOWS STATE / WEATHER / SCENARIOS
-    _walk(getattr(climate, "home_windows_state", None))
+    # --- APT WINDOWS / WEATHER / SCENARIOS
+    _walk(getattr(climate, "apt_windows", None))
     _walk(getattr(climate, "weather", None))
     _walk(getattr(climate, "scenarios", None))
 

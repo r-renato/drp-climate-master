@@ -15,7 +15,6 @@ from ..const import (
     CONF_SCENARIOS,
     CONF_HISTORICAL_DATA,
     CONF_WEATHER,
-    CONF_HOME_WINDOWS_STATE,
     CONF_UNITS,
     CONF_MAX_TEMP,
     CONF_MIN_TEMP,
@@ -43,7 +42,7 @@ def schema_user() -> vol.Schema:
             vol.Required(CONF_HUB_NAME): str,
             vol.Required(CONF_CLIMATE_NAME): str,
             vol.Required(CONF_CLIMATE_UNIQUE_ID): str,
-            vol.Required(CONF_HOME_WINDOWS_STATE): selector.EntitySelector(
+            vol.Required(CONF_APT_WINDOWS): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="binary_sensor")
             ),
             vol.Required(CONF_WEATHER): selector.EntitySelector(
