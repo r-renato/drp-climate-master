@@ -20,9 +20,6 @@ from ..const import (
     CONF_HISTORICAL_DATA,
     CONF_WEATHER,
     CONF_UNITS,
-    CONF_MAX_TEMP,
-    CONF_MIN_TEMP,
-    CONF_STEP,
     DEFAULT_TEMP_UNIT,
     DEFAULT_UNITS,
     CONF_APT_WINDOWS,
@@ -37,18 +34,12 @@ from .config_flow import (
     validate_devices,
     validate_scenarios,
     validate_historical_data,
-    validate_min_max,
     validate_apt_windows,
     validate_confort_zones,
 )
 
 # Opzioni runtime (allineate al runtime_config)
 OPT_UPDATE_INTERVAL_S = "update_interval_s"
-OPT_SUPPORTS_HEATING = "supports_heating"
-OPT_SUPPORTS_COOLING = "supports_cooling"
-OPT_SUPPORTS_DEHUMIDIFYING = "supports_dehumidifying"
-OPT_SETPOINT_STEP_C = "setpoint_step_c"
-OPT_MANUAL_OVERRIDE_MIN = "manual_override_minutes"
 
 def yaml_climate_to_entry_payload(hub_name: str, climate: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
@@ -73,9 +64,6 @@ def yaml_climate_to_entry_payload(hub_name: str, climate: Dict[str, Any]) -> Tup
     confort_zones = normalized_climate.get(CONF_CONFORT_ZONES, {})
 
     # Parametri climatici (con default come nello schema)
-    max_temp = normalized_climate.get(CONF_MAX_TEMP, 35.0)
-    min_temp = normalized_climate.get(CONF_MIN_TEMP, 5.0)
-    step = normalized_climate.get(CONF_STEP, 0.5)
     temp_unit = normalized_climate.get(CONF_TEMPERATURE_UNIT, DEFAULT_TEMP_UNIT)
     units = normalized_climate.get(CONF_UNITS, DEFAULT_UNITS)
 
@@ -108,10 +96,6 @@ def yaml_climate_to_entry_payload(hub_name: str, climate: Dict[str, Any]) -> Tup
     if not isinstance(apt_windows.get(CONF_STATE), str) or not apt_windows.get(CONF_STATE):
         raise ValueError("Manca 'apt_windows.state' (obbligatorio).")
 
-    err = validate_min_max(min_temp, max_temp)
-    if err:
-        raise ValueError(err)
-
     # Valida lo shape di weather e normalizza lat/lon
     weather_error, normalized_weather = normalize_weather_block(weather)
     if weather_error:
@@ -135,15 +119,7 @@ def yaml_climate_to_entry_payload(hub_name: str, climate: Dict[str, Any]) -> Tup
         CONF_CONFORT_ZONES: deepcopy(confort_zones),
         # runtime defaults
         OPT_UPDATE_INTERVAL_S: 30,
-        OPT_SUPPORTS_HEATING: True,
-        OPT_SUPPORTS_COOLING: False,
-        OPT_SUPPORTS_DEHUMIDIFYING: False,
-        OPT_SETPOINT_STEP_C: 0.5,
-        OPT_MANUAL_OVERRIDE_MIN: 90,
         # parametri climatici
-        CONF_MAX_TEMP: float(max_temp),
-        CONF_MIN_TEMP: float(min_temp),
-        CONF_STEP: float(step),
         CONF_TEMPERATURE_UNIT: str(temp_unit),
         CONF_UNITS: str(units),
     }

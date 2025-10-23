@@ -16,9 +16,6 @@ from ..const import (
     CONF_HISTORICAL_DATA,
     CONF_WEATHER,
     CONF_UNITS,
-    CONF_MAX_TEMP,
-    CONF_MIN_TEMP,
-    CONF_STEP,
     DEFAULT_TEMP_UNIT,
     DEFAULT_UNITS,
     CONF_HUB_NAME,
@@ -29,11 +26,6 @@ from ..const import (
 )
 # Opzioni runtime
 OPT_UPDATE_INTERVAL_S = "update_interval_s"
-OPT_SUPPORTS_HEATING = "supports_heating"
-OPT_SUPPORTS_COOLING = "supports_cooling"
-OPT_SUPPORTS_DEHUMIDIFYING = "supports_dehumidifying"
-OPT_SETPOINT_STEP_C = "setpoint_step_c"
-OPT_MANUAL_OVERRIDE_MIN = "manual_override_minutes"
 
 def schema_user() -> vol.Schema:
     """Form iniziale (user)."""
@@ -69,14 +61,6 @@ def schema_dynamic(cur: Mapping[str, Any], entry_data: Mapping[str, Any]) -> vol
     return vol.Schema(
         {
             vol.Required(OPT_UPDATE_INTERVAL_S, default=cur.get(OPT_UPDATE_INTERVAL_S, 30)): vol.All(int, vol.Range(min=5, max=3600)),
-            vol.Required(OPT_SUPPORTS_HEATING, default=cur.get(OPT_SUPPORTS_HEATING, True)): bool,
-            vol.Required(OPT_SUPPORTS_COOLING, default=cur.get(OPT_SUPPORTS_COOLING, False)): bool,
-            vol.Required(OPT_SUPPORTS_DEHUMIDIFYING, default=cur.get(OPT_SUPPORTS_DEHUMIDIFYING, False)): bool,
-            vol.Required(OPT_SETPOINT_STEP_C, default=cur.get(OPT_SETPOINT_STEP_C, 0.5)): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=2.0)),
-            vol.Required(OPT_MANUAL_OVERRIDE_MIN, default=cur.get(OPT_MANUAL_OVERRIDE_MIN, 90)): vol.All(int, vol.Range(min=5, max=720)),
-            vol.Required(CONF_MAX_TEMP, default=cur.get(CONF_MAX_TEMP, 35.0)): vol.Coerce(float),
-            vol.Required(CONF_MIN_TEMP, default=cur.get(CONF_MIN_TEMP, 5.0)): vol.Coerce(float),
-            vol.Required(CONF_STEP, default=cur.get(CONF_STEP, 0.5)): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=2.0)),
             vol.Required(CONF_UNITS, default=units_default): units_selector,
             vol.Required(CONF_TEMPERATURE_UNIT, default=temp_unit_default): temp_unit_selector,
         }

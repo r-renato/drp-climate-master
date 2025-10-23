@@ -56,18 +56,12 @@ from .helpers.config_flow import (
     validate_devices,
     validate_scenarios,
     validate_historical_data,
-    validate_min_max,
     validate_apt_windows,
     validate_confort_zones,
 )
 from .helpers.config_flow_entries_payload import yaml_climate_to_entry_payload
 
 from .helpers.config_flow_ui_schemas import (
-    OPT_MANUAL_OVERRIDE_MIN,
-    OPT_SETPOINT_STEP_C,
-    OPT_SUPPORTS_COOLING,
-    OPT_SUPPORTS_DEHUMIDIFYING,
-    OPT_SUPPORTS_HEATING,
     OPT_UPDATE_INTERVAL_S,
     schema_user,
     schema_dynamic,
@@ -79,15 +73,6 @@ from .helpers.config_flow_ui_schemas import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-
-# Opzioni runtime (allineate al runtime_config)
-# OPT_UPDATE_INTERVAL_S = "update_interval_s"
-# OPT_SUPPORTS_HEATING = "supports_heating"
-# OPT_SUPPORTS_COOLING = "supports_cooling"
-# OPT_SUPPORTS_DEHUMIDIFYING = "supports_dehumidifying"
-# OPT_SETPOINT_STEP_C = "setpoint_step_c"
-# OPT_MANUAL_OVERRIDE_MIN = "manual_override_minutes"
-
 
 class DrpClimateMasterConfigFlow(ConfigFlow, domain=DOMAIN):
     """Config Flow: orchestrazione UI e gestione import."""
@@ -140,16 +125,8 @@ class DrpClimateMasterConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_APT_WINDOWS: {CONF_STATE: str(apt_windows_state)},
             CONF_CONFORT_ZONES: {},
             CONF_UNITS: str(DEFAULT_UNITS),
-            CONF_MAX_TEMP: 35.0,
-            CONF_MIN_TEMP: 5.0,
-            CONF_STEP: 0.5,
             CONF_TEMPERATURE_UNIT: str(DEFAULT_TEMP_UNIT),
             OPT_UPDATE_INTERVAL_S: 30,
-            OPT_SUPPORTS_HEATING: True,
-            OPT_SUPPORTS_COOLING: False,
-            OPT_SUPPORTS_DEHUMIDIFYING: False,
-            OPT_SETPOINT_STEP_C: 0.5,
-            OPT_MANUAL_OVERRIDE_MIN: 90,
         }
 
         return await self.async_step_dynamic()
@@ -162,26 +139,10 @@ class DrpClimateMasterConfigFlow(ConfigFlow, domain=DOMAIN):
                 data_schema=schema_dynamic(self._entry_options, self._entry_data),
             )
 
-        err = validate_min_max(user_input[CONF_MIN_TEMP], user_input[CONF_MAX_TEMP])
-        if err:
-            return self.async_show_form(
-                step_id="dynamic",
-                data_schema=schema_dynamic(self._entry_options, self._entry_data),
-                errors={"base": err},
-            )
-
         new_options: Dict[str, Any] = dict(self._entry_options)
         new_options.update(
             {
                 OPT_UPDATE_INTERVAL_S: user_input[OPT_UPDATE_INTERVAL_S],
-                OPT_SUPPORTS_HEATING: user_input[OPT_SUPPORTS_HEATING],
-                OPT_SUPPORTS_COOLING: user_input[OPT_SUPPORTS_COOLING],
-                OPT_SUPPORTS_DEHUMIDIFYING: user_input[OPT_SUPPORTS_DEHUMIDIFYING],
-                OPT_SETPOINT_STEP_C: float(user_input[OPT_SETPOINT_STEP_C]),
-                OPT_MANUAL_OVERRIDE_MIN: user_input[OPT_MANUAL_OVERRIDE_MIN],
-                CONF_MAX_TEMP: float(user_input[CONF_MAX_TEMP]),
-                CONF_MIN_TEMP: float(user_input[CONF_MIN_TEMP]),
-                CONF_STEP: float(user_input[CONF_STEP]),
                 CONF_UNITS: str(user_input[CONF_UNITS]),
                 CONF_TEMPERATURE_UNIT: str(user_input[CONF_TEMPERATURE_UNIT]),
             }
@@ -501,22 +462,21 @@ class DrpClimateMasterOptionsFlowHandler(OptionsFlow):
         if user_input is None:
             return self.async_show_form(step_id="dynamic", data_schema=schema_dynamic(cur, self.entry.data))
 
-        err = validate_min_max(user_input[CONF_MIN_TEMP], user_input[CONF_MAX_TEMP])
-        if err:
-            return self.async_show_form(step_id="dynamic", data_schema=schema_dynamic(cur, self.entry.data), errors={"base": err})
-
         new_options: Dict[str, Any] = dict(cur)
+        for deprecated in (
+            CONF_MAX_TEMP,
+            CONF_MIN_TEMP,
+            CONF_STEP,
+            "setpoint_step_c",
+            "manual_override_minutes",
+            "supports_heating",
+            "supports_cooling",
+            "supports_dehumidifying",
+        ):
+            new_options.pop(deprecated, None)
         new_options.update(
             {
                 OPT_UPDATE_INTERVAL_S: user_input[OPT_UPDATE_INTERVAL_S],
-                OPT_SUPPORTS_HEATING: user_input[OPT_SUPPORTS_HEATING],
-                OPT_SUPPORTS_COOLING: user_input[OPT_SUPPORTS_COOLING],
-                OPT_SUPPORTS_DEHUMIDIFYING: user_input[OPT_SUPPORTS_DEHUMIDIFYING],
-                OPT_SETPOINT_STEP_C: float(user_input[OPT_SETPOINT_STEP_C]),
-                OPT_MANUAL_OVERRIDE_MIN: user_input[OPT_MANUAL_OVERRIDE_MIN],
-                CONF_MAX_TEMP: float(user_input[CONF_MAX_TEMP]),
-                CONF_MIN_TEMP: float(user_input[CONF_MIN_TEMP]),
-                CONF_STEP: float(user_input[CONF_STEP]),
                 CONF_UNITS: str(user_input[CONF_UNITS]),
                 CONF_TEMPERATURE_UNIT: str(user_input[CONF_TEMPERATURE_UNIT]),
             }
