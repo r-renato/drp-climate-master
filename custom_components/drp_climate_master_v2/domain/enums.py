@@ -1,9 +1,8 @@
 # custom_components/drp_climate_master_v2/domain/models.py
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from enum import Enum, StrEnum, unique
-from typing import Optional, Dict, List
+from typing import Tuple
 
 # -------------------- High-level operating enums -------------------- #
 
@@ -28,6 +27,16 @@ class Seasons(StrEnum):
     SUMMER = "summer"
     AUTUMN = "autumn"
 
+    @staticmethod
+    def ordered() -> Tuple[Seasons, Seasons, Seasons, Seasons]:
+        """..."""
+        return (
+            Seasons.WINTER,
+            Seasons.SPRING,
+            Seasons.SUMMER,
+            Seasons.AUTUMN,
+        )
+    
     def __str__(self) -> str:
         """Rappresentazione leggibile in italiano."""
         mapping = {

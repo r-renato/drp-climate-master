@@ -20,15 +20,10 @@ from ..domain.enums import Seasons
 _LOGGER = logging.getLogger(__name__)
 
 # Ordine canonico delle stagioni (emisfero nord): utile per ordinamenti coerenti
-_SEASON_ORDER: Tuple[Seasons, Seasons, Seasons, Seasons] = (
-    Seasons.WINTER,
-    Seasons.SPRING,
-    Seasons.SUMMER,
-    Seasons.AUTUMN,
-)
+_SEASON_ORDER = Seasons.ordered()
 
 
-class SeasonCalendar:
+class CalendarSeason:
     """
     Calendarizzatore di stagioni **meteorologiche** (DJF, MAM, JJA, SON)
     per anno ed emisfero, con gestione robusta degli anni bisestili e degli
@@ -36,7 +31,7 @@ class SeasonCalendar:
 
     Convenzione sull'anno:
         `year` è l'anno in cui l'INVERNO termina (Febbraio di `year`).
-        Esempio: SeasonCalendar(2025) → Winter: 2024-12-01 .. 2025-02-28/29.
+        Esempio: CalendarSeason(2025) → Winter: 2024-12-01 .. 2025-02-28/29.
 
     Emisferi supportati:
         - "north":  WINTER=Dec-Feb, SPRING=Mar-May, SUMMER=Jun-Aug, AUTUMN=Sep-Nov
@@ -90,16 +85,16 @@ class SeasonCalendar:
         self._hemisphere: Literal["north", "south"] = cast(Literal["north", "south"], hemi)
 
     # ---- fluent helpers ------------------------------------------------------
-    def with_year(self, year: int) -> "SeasonCalendar":
+    def with_year(self, year: int) -> "CalendarSeason":
         """Ritorna una nuova istanza con stesso emisfero ma anno diverso."""
-        return SeasonCalendar(year, hemisphere=self._hemisphere)
+        return CalendarSeason(year, hemisphere=self._hemisphere)
 
-    def with_hemisphere(self, hemisphere: Literal["north", "south"]) -> "SeasonCalendar":
+    def with_hemisphere(self, hemisphere: Literal["north", "south"]) -> "CalendarSeason":
         """Ritorna una nuova istanza con stesso anno ma emisfero diverso."""
-        return SeasonCalendar(self._year, hemisphere=hemisphere)
+        return CalendarSeason(self._year, hemisphere=hemisphere)
 
     # ---- API -----------------------------------------------------------------
-    def windows(self) -> Dict[Seasons, "SeasonCalendar.SeasonWindow"]:
+    def windows(self) -> Dict[Seasons, "CalendarSeason.SeasonWindow"]:
         """
         Restituisce le finestre stagionali meteorologiche per l'anno/emisfero correnti.
         """
@@ -129,7 +124,7 @@ class SeasonCalendar:
                 if w.contains(d):
                     return w.season
         # Non dovrebbe accadere
-        _LOGGER.warning("SeasonCalendar: date %s not in any window (unexpected).", d)
+        _LOGGER.warning("CalendarSeason: date %s not in any window (unexpected).", d)
         return Seasons.SUMMER
 
     # ---- internals -----------------------------------------------------------
@@ -139,7 +134,7 @@ class SeasonCalendar:
         return calendar.monthrange(y, m)[1]
 
     @classmethod
-    def _north_windows(cls, year: int) -> Dict[Seasons, "SeasonCalendar.SeasonWindow"]:
+    def _north_windows(cls, year: int) -> Dict[Seasons, "CalendarSeason.SeasonWindow"]:
         """Finestre stagionali per emisfero nord (anno logico `year`)."""
         winter = cls.SeasonWindow(
             Seasons.WINTER, date(year - 1, 12, 1), date(year, 2, cls._eom(year, 2))
@@ -155,7 +150,7 @@ class SeasonCalendar:
         }
 
     @classmethod
-    def _south_windows(cls, year: int) -> Dict[Seasons, "SeasonCalendar.SeasonWindow"]:
+    def _south_windows(cls, year: int) -> Dict[Seasons, "CalendarSeason.SeasonWindow"]:
         """Finestre stagionali per emisfero sud (anno logico `year`)."""
         summer = cls.SeasonWindow(
             Seasons.SUMMER, date(year - 1, 12, 1), date(year, 2, cls._eom(year, 2))
@@ -171,23 +166,10 @@ class SeasonCalendar:
         }
 
 
-@dataclass(slots=True, frozen=True)
-class _ScoreParams:
-    """
-    Parametri di scoring:
-    - day_decay/half-life sono gestiti internamente con decadimento esponenziale.
-    - boost gaussiano sul prior al centro della finestra stagionale.
-    - sigma per RBF di scarto dalla climatologia (°C).
-    """
-    # boost gaussiano sul prior in prossimità del "cuore" della stagione
-    boost_sigma: float = 0.20
-    boost_amp: float = 0.20
-    # dispersioni (°C) per le RBF di scarto dalla climatologia
-    sigma_temp: float = 3.0
-    sigma_dew: float = 2.0
 
 
-class WeatherSeasonDetector:
+
+class WeatherSeason:
     """
     Rilevamento stagione basato su:
       1) Prior da calendario (DJF/MAM/JJA/SON) con boost gaussiano sul cuore stagione.
@@ -206,10 +188,25 @@ class WeatherSeasonDetector:
       - Le unità attese per T e dew sono °C: normalizzare a monte nei provider.
     """
 
+    @dataclass(slots=True, frozen=True)
+    class _ScoreParams:
+        """
+        Parametri di scoring:
+        - day_decay/half-life sono gestiti internamente con decadimento esponenziale.
+        - boost gaussiano sul prior al centro della finestra stagionale.
+        - sigma per RBF di scarto dalla climatologia (°C).
+        """
+        # boost gaussiano sul prior in prossimità del "cuore" della stagione
+        boost_sigma: float = 0.20
+        boost_amp: float = 0.20
+        # dispersioni (°C) per le RBF di scarto dalla climatologia
+        sigma_temp: float = 3.0
+        sigma_dew: float = 2.0
+
     def __init__(
         self,
         weatherHistorical: WeatherHistoricalProvider,
-        calendar: SeasonCalendar = SeasonCalendar(),
+        calendar: CalendarSeason = CalendarSeason(),
         *,
         history_days: int = 21,
         params: Optional[_ScoreParams] = None,
@@ -220,7 +217,7 @@ class WeatherSeasonDetector:
         """
         Args:
             weatherHistorical: provider storico (deve esporre `daily_range` o `daily`).
-            calendar: istanza di SeasonCalendar (emisfero/anno baseline).
+            calendar: istanza di CalendarSeason (emisfero/anno baseline).
             history_days: giorni di storico da pesare (min 7).
             params: parametri di scoring.
             provider_id: id diagnostico del provider.
@@ -232,7 +229,7 @@ class WeatherSeasonDetector:
         self._weather_historical = weatherHistorical
         self._weather_forecast = weatherForecast
         self._history_days = max(7, int(history_days))
-        self._p = params or _ScoreParams()
+        self._p = params or WeatherSeason._ScoreParams()
         self._provider_id = provider_id
         self._last_offset = max(0, int(last_available_offset_days))
 
@@ -311,7 +308,7 @@ class WeatherSeasonDetector:
 
     # ---------------------------- internals ----------------------------------
     def _build_prior(
-        self, cal: SeasonCalendar, d: date, baseline: Seasons
+        self, cal: CalendarSeason, d: date, baseline: Seasons
     ) -> Dict[Seasons, float]:
         """Costruisce il prior da calendario con boost gaussiano al centro finestra."""
 
@@ -339,7 +336,7 @@ class WeatherSeasonDetector:
         return self._normalize(prior)
 
     @staticmethod
-    def _relative_pos_in_window(win: SeasonCalendar.SeasonWindow, d: date) -> float:
+    def _relative_pos_in_window(win: CalendarSeason.SeasonWindow, d: date) -> float:
         """Posizione relativa 0..1 della data `d` nella finestra stagionale `win`."""
         span = (win.end - win.start).days or 1
         pos = max(0, min(span, (d - win.start).days))
@@ -550,7 +547,7 @@ class WeatherSeasonDetector:
 
     def _season_window_metrics(
         self,
-        win: SeasonCalendar.SeasonWindow,
+        win: CalendarSeason.SeasonWindow,
         today: date,
     ) -> tuple[int, int, int]:
         """Ritorna (days, passed, remaining) per finestra inclusiva [start, end]."""

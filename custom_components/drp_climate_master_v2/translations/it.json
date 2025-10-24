@@ -2,8 +2,18 @@
     "options": {
         "step": {
             "init": {
-                "title": "Opzioni DRP Climate",
-                "description": "Scegli quale sezione della configurazione vuoi modificare."
+                "title": "Opzioni Climate Master (DRP)",
+                "description": "Scegli quale sezione della configurazione vuoi modificare.",
+                "menu_options": {
+                    "dynamic": "Dynamic parameters",
+                    "areas": "Areas",
+                    "radiant": "Radiant devices",
+                    "supply_units": "Supply units",
+                    "vmc": "VMC",
+                    "weather": "Weather",
+                    "historical_data": "Historical data",
+                    "advanced": "Other devices and scenarios"
+                }
             },
             "dynamic": {
                 "title": "Parametri dinamici",
